@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="LocoMocktion Sample"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name>Sample Route - Paris</name>
+    <desc>A sample route through Paris for testing LocoMocktion</desc>
+  </metadata>
+  <trk>
+    <name>Paris Test Route</name>
+    <trkseg>
+      <!-- Starting near the Eiffel Tower -->
+      <trkpt lat="48.8584" lon="2.2945">
+        <ele>35</ele>
+      </trkpt>
+      <trkpt lat="48.8590" lon="2.2960">
+        <ele>35</ele>
+      </trkpt>
+      <trkpt lat="48.8600" lon="2.2970">
+        <ele>36</ele>
+      </trkpt>
+      <!-- Turn towards the Seine -->
+      <trkpt lat="48.8610" lon="2.2985">
+        <ele>36</ele>
+      </trkpt>
+      <trkpt lat="48.8615" lon="2.3000">
+        <ele>36</ele>
+      </trkpt>
+      <trkpt lat="48.8620" lon="2.3020">
+        <ele>37</ele>
+      </trkpt>
+      <!-- Curve along the river -->
+      <trkpt lat="48.8625" lon="2.3045">
+        <ele>37</ele>
+      </trkpt>
+      <trkpt lat="48.8628" lon="2.3070">
+        <ele>38</ele>
+      </trkpt>
+      <trkpt lat="48.8630" lon="2.3095">
+        <ele>38</ele>
+      </trkpt>
+      <!-- Sharp turn -->
+      <trkpt lat="48.8635" lon="2.3115">
+        <ele>39</ele>
+      </trkpt>
+      <trkpt lat="48.8645" lon="2.3120">
+        <ele>39</ele>
+      </trkpt>
+      <trkpt lat="48.8655" lon="2.3122">
+        <ele>40</ele>
+      </trkpt>
+      <!-- Straight section -->
+      <trkpt lat="48.8665" lon="2.3123">
+        <ele>40</ele>
+      </trkpt>
+      <trkpt lat="48.8675" lon="2.3124">
+        <ele>41</ele>
+      </trkpt>
+      <trkpt lat="48.8685" lon="2.3125">
+        <ele>41</ele>
+      </trkpt>
+      <!-- Ending point -->
+      <trkpt lat="48.8695" lon="2.3126">
+        <ele>42</ele>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
