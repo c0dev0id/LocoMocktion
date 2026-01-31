@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LocoMocktion</string>
+    <string name="upload_gpx">Upload GPX</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="stop">Stop</string>
+    <string name="speed_label">Speed (km/h):</string>
+    <string name="no_route_loaded">No route loaded. Please upload a GPX file.</string>
+    <string name="route_loaded">Route loaded: %d points</string>
+    <string name="mocking_started">Location mocking started</string>
+    <string name="mocking_stopped">Location mocking stopped</string>
+    <string name="error_reading_gpx">Error reading GPX file</string>
+    <string name="error_mock_location">Error: Enable mock locations in developer settings</string>
+    <string name="select_speed">Select Speed</string>
+</resources>
