@@ -79,12 +79,12 @@ The speed picker allows you to simulate different travel scenarios:
 
 LocoMocktion automatically adjusts speed in corners based on the turn angle:
 
-| Turn Type | Angle | Speed Adjustment |
-|-----------|-------|------------------|
+| Turn Type | Angle | Speed |
+|-----------|-------|-------|
 | Sharp turn | < 90° | 40% of base speed |
 | Medium turn | 90-120° | 60% of base speed |
 | Slight turn | 120-150° | 80% of base speed |
-| Straight | > 150° | Full speed |
+| Straight | > 150° | 100% of base speed (full speed) |
 
 This creates realistic GPS movement patterns similar to actual driving behavior.
 

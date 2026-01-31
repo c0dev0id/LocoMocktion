@@ -28,11 +28,27 @@ class MainActivity : AppCompatActivity() {
     private var routePoints: List<WayPoint> = emptyList()
     private var mockService: LocationMockService? = null
     private var isPlaying = false
-    private val REQUEST_CODE_PICK_GPX = 1
     private val REQUEST_CODE_PERMISSIONS = 100
 
     private val speeds = listOf(5, 10, 20, 30, 40, 50, 60, 80, 100, 120)
     private var selectedSpeed = 30 // Default speed in km/h
+
+    private val gpxPickerLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            try {
+                val inputStream: InputStream? = contentResolver.openInputStream(it)
+                inputStream?.let { stream ->
+                    loadGpxFile(stream)
+                    stream.close()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, getString(R.string.error_reading_gpx), Toast.LENGTH_SHORT).show()
+                e.printStackTrace()
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,31 +125,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openGpxFilePicker() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/gpx+xml", "application/xml", "text/xml"))
-        }
-        startActivityForResult(intent, REQUEST_CODE_PICK_GPX)
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        
-        if (requestCode == REQUEST_CODE_PICK_GPX && resultCode == Activity.RESULT_OK) {
-            data?.data?.let { uri ->
-                try {
-                    val inputStream: InputStream? = contentResolver.openInputStream(uri)
-                    inputStream?.let {
-                        loadGpxFile(it)
-                        it.close()
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(this, getString(R.string.error_reading_gpx), Toast.LENGTH_SHORT).show()
-                    e.printStackTrace()
-                }
-            }
-        }
+        gpxPickerLauncher.launch(arrayOf("application/gpx+xml", "application/xml", "text/xml", "*/*"))
     }
 
     private fun loadGpxFile(inputStream: InputStream) {

@@ -11,10 +11,10 @@ Mock location tool for Android to test navigation applications.
 - ✅ Has a speed picker to select travel speed in km/h (5, 10, 20, 30, 40, 50, 60, 80, 100, 120)
 - ✅ Has a play button to start mocking from the start of the route with selected speed
 - ✅ Automatically slows down in corners based on turn angle
-  - Sharp turns (<90°): 40% speed reduction
-  - Medium turns (90-120°): 60% speed
-  - Slight turns (120-150°): 80% speed
-  - Straight sections: full speed
+  - Sharp turns (<90°): 40% of base speed
+  - Medium turns (90-120°): 60% of base speed
+  - Slight turns (120-150°): 80% of base speed
+  - Straight sections: 100% of base speed (full speed)
 
 ## Building the App
 

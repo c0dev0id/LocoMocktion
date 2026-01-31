@@ -135,12 +135,12 @@ class LocationMockService : Service() {
         val angle = calculateCornerAngle(prevPoint, currentPoint, nextPoint)
         
         // Reduce speed in corners
-        // Sharp corners (< 120°) reduce speed more
+        // Speed is specified as percentage of base speed
         return when {
-            angle < 90 -> baseSpeedKmh * 0.4  // Sharp turn: 40% speed
-            angle < 120 -> baseSpeedKmh * 0.6 // Medium turn: 60% speed
-            angle < 150 -> baseSpeedKmh * 0.8 // Slight turn: 80% speed
-            else -> baseSpeedKmh                // Straight: full speed
+            angle < 90 -> baseSpeedKmh * 0.4  // Sharp turn: 40% of base speed
+            angle < 120 -> baseSpeedKmh * 0.6 // Medium turn: 60% of base speed
+            angle < 150 -> baseSpeedKmh * 0.8 // Slight turn: 80% of base speed
+            else -> baseSpeedKmh                // Straight: 100% of base speed (full speed)
         }
     }
 
