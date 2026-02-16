@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -338,8 +339,10 @@ private fun TrackPreviewCard(
                             val startPos = toScreen(positionAtMeters((currentStartKm * 1000).toDouble()))
                             val endPos = toScreen(positionAtMeters((currentEndKm * 1000).toDouble()))
 
-                            val dStart = (down.position - startPos).getDistance()
-                            val dEnd = (down.position - endPos).getDistance()
+                            val diffStart = down.position - startPos
+                            val dStart = kotlin.math.sqrt(diffStart.x * diffStart.x + diffStart.y * diffStart.y)
+                            val diffEnd = down.position - endPos
+                            val dEnd = kotlin.math.sqrt(diffEnd.x * diffEnd.x + diffEnd.y * diffEnd.y)
 
                             val target = when {
                                 dStart <= hitRadiusPx && dStart <= dEnd -> "start"
