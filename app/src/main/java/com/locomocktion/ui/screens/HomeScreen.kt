@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.locomocktion.MainViewModel
 import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
+import com.locomocktion.service.TravelMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,11 +95,20 @@ fun HomeScreen(viewModel: MainViewModel) {
                     currentPoint = currentPoint,
                 )
 
-                // Start offset input
-                StartOffsetCard(
-                    offsetKm = uiState.startOffsetKm,
+                // Track range (start / end)
+                TrackRangeCard(
+                    startKm = uiState.startKm,
+                    endKm = uiState.endKm,
                     totalDistanceKm = track.totalDistanceMeters / 1000.0,
-                    onOffsetChange = viewModel::setStartOffset,
+                    onStartChange = viewModel::setStartKm,
+                    onEndChange = viewModel::setEndKm,
+                    isRunning = isRunning,
+                )
+
+                // Travel mode
+                TravelModeCard(
+                    travelMode = uiState.travelMode,
+                    onModeChange = viewModel::setTravelMode,
                     isRunning = isRunning,
                 )
             }
@@ -268,51 +278,129 @@ private fun TrackPreviewCard(track: GpxTrack, currentPoint: TrackPoint?) {
 }
 
 @Composable
-private fun StartOffsetCard(
-    offsetKm: Float,
+private fun TrackRangeCard(
+    startKm: Float,
+    endKm: Float,
     totalDistanceKm: Double,
-    onOffsetChange: (Float) -> Unit,
+    onStartChange: (Float) -> Unit,
+    onEndChange: (Float) -> Unit,
     isRunning: Boolean,
 ) {
-    var textValue by remember(offsetKm) {
-        mutableStateOf(if (offsetKm == 0f) "" else "%.2f".format(offsetKm))
+    var startText by remember(startKm) {
+        mutableStateOf(if (startKm == 0f) "" else "%.2f".format(startKm))
+    }
+    var endText by remember(endKm) {
+        mutableStateOf("%.2f".format(endKm))
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Start Offset",
+                text = "Track Range",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Enter a distance to resume the track from that point",
+                text = "Track total: %.2f km".format(totalDistanceKm),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedTextField(
-                value = textValue,
-                onValueChange = { input ->
-                    textValue = input
-                    val parsed = input.toFloatOrNull()
-                    if (parsed != null) {
-                        onOffsetChange(parsed)
-                    } else if (input.isEmpty()) {
-                        onOffsetChange(0f)
-                    }
-                },
-                label = { Text("Distance from start (km)") },
-                supportingText = {
-                    Text("Track total: %.2f km".format(totalDistanceKm))
-                },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                singleLine = true,
-                enabled = !isRunning,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = startText,
+                    onValueChange = { input ->
+                        startText = input
+                        val parsed = input.toFloatOrNull()
+                        if (parsed != null) onStartChange(parsed)
+                        else if (input.isEmpty()) onStartChange(0f)
+                    },
+                    label = { Text("Start (km)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    enabled = !isRunning,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = endText,
+                    onValueChange = { input ->
+                        endText = input
+                        val parsed = input.toFloatOrNull()
+                        if (parsed != null) onEndChange(parsed)
+                        else if (input.isEmpty()) onEndChange(totalDistanceKm.toFloat())
+                    },
+                    label = { Text("End (km)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    enabled = !isRunning,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TravelModeCard(
+    travelMode: TravelMode,
+    onModeChange: (TravelMode) -> Unit,
+    isRunning: Boolean,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Travel Mode",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
             )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { if (!isRunning) expanded = it },
+            ) {
+                OutlinedTextField(
+                    value = travelMode.label,
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = !isRunning,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    TravelMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(mode.label)
+                                    Text(
+                                        mode.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onModeChange(mode)
+                                expanded = false
+                            },
+                        )
+                    }
+                }
+            }
         }
     }
 }

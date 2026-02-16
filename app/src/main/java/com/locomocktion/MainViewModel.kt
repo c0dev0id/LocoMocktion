@@ -9,6 +9,7 @@ import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
 import com.locomocktion.gpx.parseGpx
 import com.locomocktion.service.MockLocationService
+import com.locomocktion.service.TravelMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -18,7 +19,9 @@ data class UiState(
     val fileName: String? = null,
     val speedKmh: Float = 20f,
     val updateIntervalMs: Long = 1000L,
-    val startOffsetKm: Float = 0f,
+    val startKm: Float = 0f,
+    val endKm: Float = 0f,
+    val travelMode: TravelMode = TravelMode.Normal,
     val error: String? = null,
 )
 
@@ -46,7 +49,8 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                     it.copy(
                         track = track,
                         fileName = displayName ?: track.name ?: "Unknown",
-                        startOffsetKm = 0f,
+                        startKm = 0f,
+                        endKm = (track.totalDistanceMeters / 1000).toFloat(),
                         error = null,
                     )
                 }
@@ -66,10 +70,32 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         MockLocationService.updateInterval(ms)
     }
 
-    fun setStartOffset(km: Float) {
+    fun setStartKm(km: Float) {
         val track = _uiState.value.track ?: return
         val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        _uiState.update { it.copy(startOffsetKm = km.coerceIn(0f, maxKm)) }
+        val clamped = km.coerceIn(0f, maxKm)
+        _uiState.update {
+            it.copy(
+                startKm = clamped,
+                endKm = it.endKm.coerceAtLeast(clamped),
+            )
+        }
+    }
+
+    fun setEndKm(km: Float) {
+        val track = _uiState.value.track ?: return
+        val maxKm = (track.totalDistanceMeters / 1000).toFloat()
+        val clamped = km.coerceIn(0f, maxKm)
+        _uiState.update {
+            it.copy(
+                endKm = clamped,
+                startKm = it.startKm.coerceAtMost(clamped),
+            )
+        }
+    }
+
+    fun setTravelMode(mode: TravelMode) {
+        _uiState.update { it.copy(travelMode = mode) }
     }
 
     fun startMocking() {
@@ -79,7 +105,9 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
             points = track.points,
             speed = state.speedKmh / 3.6f,
             intervalMs = state.updateIntervalMs,
-            offsetMeters = (state.startOffsetKm * 1000).toDouble(),
+            offsetMeters = (state.startKm * 1000).toDouble(),
+            endOffsetMeters = (state.endKm * 1000).toDouble(),
+            travelMode = state.travelMode,
         )
 
         val intent = Intent(app, MockLocationService::class.java)

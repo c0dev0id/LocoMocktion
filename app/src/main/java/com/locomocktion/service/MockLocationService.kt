@@ -24,6 +24,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+enum class TravelMode(val label: String, val description: String) {
+    Normal("Normal", "Travel from Start to End, then stop"),
+    Loop("Loop", "Travel from Start to End, then repeat"),
+    Bounce("Bounce", "Travel back and forth between Start and End"),
+}
+
 class MockLocationService : LifecycleService() {
 
     companion object {
@@ -48,17 +54,23 @@ class MockLocationService : LifecycleService() {
         var updateIntervalMs: Long = 1000L
             private set
         private var startOffsetMeters: Double = 0.0
+        private var endOffsetMeters: Double = Double.MAX_VALUE
+        private var travelMode: TravelMode = TravelMode.Normal
 
         fun configure(
             points: List<TrackPoint>,
             speed: Float,
             intervalMs: Long,
             offsetMeters: Double,
+            endOffsetMeters: Double,
+            travelMode: TravelMode,
         ) {
             trackPoints = points
             speedMultiplier = speed
             updateIntervalMs = intervalMs
             startOffsetMeters = offsetMeters
+            this.endOffsetMeters = endOffsetMeters
+            this.travelMode = travelMode
         }
 
         fun updateSpeed(speed: Float) {
@@ -146,53 +158,84 @@ class MockLocationService : LifecycleService() {
     private suspend fun walkTrack() {
         if (trackPoints.size < 2) return
 
-        // Pre-compute cumulative distances for each segment boundary
         val segmentDistances = (0 until trackPoints.lastIndex).map { i ->
             distanceBetween(trackPoints[i], trackPoints[i + 1])
         }
         val totalDist = segmentDistances.sum()
         if (totalDist < 0.1) return
 
-        // Find starting position from offset
-        var segmentIndex = 0
-        var segmentOffset = 0.0
-        var cumulativeDist = 0.0
+        val startMeters = startOffsetMeters.coerceIn(0.0, totalDist)
+        val endMeters = endOffsetMeters.coerceIn(0.0, totalDist).coerceAtLeast(startMeters)
+        val rangeMeters = endMeters - startMeters
+        if (rangeMeters < 0.1) return
 
-        if (startOffsetMeters > 0.0) {
-            var remaining = startOffsetMeters.coerceAtMost(totalDist)
-            for (i in segmentDistances.indices) {
-                if (remaining <= segmentDistances[i]) {
-                    segmentIndex = i
-                    segmentOffset = remaining
-                    break
-                }
-                remaining -= segmentDistances[i]
-                cumulativeDist += segmentDistances[i]
-                if (i == segmentDistances.lastIndex) {
-                    segmentIndex = i
-                    segmentOffset = segmentDistances[i]
+        var totalTraveled = 0.0
+
+        while (true) {
+            totalTraveled = walkBetween(
+                startMeters, endMeters, segmentDistances,
+                rangeMeters, totalTraveled, forward = true,
+            )
+
+            when (travelMode) {
+                TravelMode.Normal -> break
+                TravelMode.Loop -> delay(3000)
+                TravelMode.Bounce -> {
+                    delay(3000)
+                    totalTraveled = walkBetween(
+                        endMeters, startMeters, segmentDistances,
+                        rangeMeters, totalTraveled, forward = false,
+                    )
+                    delay(3000)
                 }
             }
-            cumulativeDist += segmentOffset
         }
 
-        _distanceTraveled.value = cumulativeDist
+        // Set final point at end position (Normal mode only)
+        val (segIdx, segOff) = findPosition(endMeters, segmentDistances)
+        if (segIdx < trackPoints.size - 1) {
+            val from = trackPoints[segIdx]
+            val to = trackPoints[segIdx + 1]
+            val segDist = segmentDistances[segIdx]
+            val fraction = if (segDist < 0.1) 0.0 else (segOff / segDist).coerceIn(0.0, 1.0)
+            val finalPoint = TrackPoint(
+                from.latitude + (to.latitude - from.latitude) * fraction,
+                from.longitude + (to.longitude - from.longitude) * fraction,
+                if (from.elevation != null && to.elevation != null)
+                    from.elevation + (to.elevation - from.elevation) * fraction
+                else from.elevation ?: to.elevation,
+            )
+            setMockLocation(finalPoint, 0f)
+            _currentPoint.value = finalPoint
+        }
+        _progress.value = 1f
+        _distanceTraveled.value = totalTraveled
+    }
 
-        // Walk along each segment, interpolating positions at the configured interval
-        while (segmentIndex < trackPoints.size - 1) {
+    private suspend fun walkBetween(
+        fromMeters: Double,
+        toMeters: Double,
+        segmentDistances: List<Double>,
+        rangeMeters: Double,
+        initialTraveled: Double,
+        forward: Boolean,
+    ): Double {
+        var (segmentIndex, segmentOffset) = findPosition(fromMeters, segmentDistances)
+        var legTraveled = 0.0
+        var totalTraveled = initialTraveled
+
+        while (legTraveled < rangeMeters) {
+            if (segmentIndex < 0 || segmentIndex >= segmentDistances.size) break
+
             val from = trackPoints[segmentIndex]
             val to = trackPoints[segmentIndex + 1]
             val segmentDist = segmentDistances[segmentIndex]
 
             if (segmentDist < 0.1) {
-                segmentIndex++
+                if (forward) segmentIndex++ else segmentIndex--
+                segmentOffset = 0.0
                 continue
             }
-
-            // Read current settings each tick so live changes take effect
-            val intervalMs = updateIntervalMs
-            val metersPerSecond = speedMultiplier.toDouble()
-            val stepMeters = metersPerSecond * (intervalMs / 1000.0)
 
             // Interpolate position
             val fraction = (segmentOffset / segmentDist).coerceIn(0.0, 1.0)
@@ -205,30 +248,57 @@ class MockLocationService : LifecycleService() {
             }
 
             val point = TrackPoint(lat, lon, ele)
-            setMockLocation(point, bearing(from, to).toFloat())
+            val bearingVal = if (forward) bearing(from, to) else bearing(to, from)
+            setMockLocation(point, bearingVal.toFloat())
             _currentPoint.value = point
-            _progress.value = (cumulativeDist / totalDist).toFloat().coerceIn(0f, 1f)
-            _distanceTraveled.value = cumulativeDist
+
+            val progressInLeg = (legTraveled / rangeMeters).toFloat().coerceIn(0f, 1f)
+            _progress.value = if (forward) progressInLeg else 1f - progressInLeg
+            _distanceTraveled.value = totalTraveled
+
+            // Read current settings each tick so live changes take effect
+            val intervalMs = updateIntervalMs
+            val metersPerSecond = speedMultiplier.toDouble()
+            val stepMeters = metersPerSecond * (intervalMs / 1000.0)
 
             delay(intervalMs)
 
-            segmentOffset += stepMeters
-            cumulativeDist += stepMeters
+            legTraveled += stepMeters
+            totalTraveled += stepMeters
 
-            // Advance to next segment(s) if we've passed the current one
-            while (segmentIndex < trackPoints.size - 1 && segmentOffset >= segmentDistances[segmentIndex]) {
-                segmentOffset -= segmentDistances[segmentIndex]
-                segmentIndex++
+            if (forward) {
+                segmentOffset += stepMeters
+                while (segmentIndex < segmentDistances.size - 1 &&
+                    segmentOffset >= segmentDistances[segmentIndex]
+                ) {
+                    segmentOffset -= segmentDistances[segmentIndex]
+                    segmentIndex++
+                }
+            } else {
+                segmentOffset -= stepMeters
+                while (segmentIndex > 0 && segmentOffset < 0) {
+                    segmentIndex--
+                    segmentOffset += segmentDistances[segmentIndex]
+                }
+                if (segmentOffset < 0) segmentOffset = 0.0
             }
         }
 
-        // Set final point
-        trackPoints.lastOrNull()?.let { last ->
-            setMockLocation(last, 0f)
-            _currentPoint.value = last
+        return totalTraveled
+    }
+
+    private fun findPosition(
+        offsetMeters: Double,
+        segmentDistances: List<Double>,
+    ): Pair<Int, Double> {
+        var remaining = offsetMeters
+        for (i in segmentDistances.indices) {
+            if (remaining <= segmentDistances[i]) {
+                return Pair(i, remaining)
+            }
+            remaining -= segmentDistances[i]
         }
-        _progress.value = 1f
-        _distanceTraveled.value = totalDist
+        return Pair(segmentDistances.lastIndex, segmentDistances.last())
     }
 
     private fun setMockLocation(point: TrackPoint, bearing: Float) {
