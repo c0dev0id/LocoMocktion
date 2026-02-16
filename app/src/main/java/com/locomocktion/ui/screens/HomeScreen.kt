@@ -20,7 +20,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -383,26 +385,60 @@ private fun TrackPreviewCard(
                     return Offset(x, y)
                 }
 
-                // Draw track line
+                // Draw track line: active range in full color, inactive in faded
+                val startMeters = (startKm * 1000).toDouble()
+                val endMeters = (endKm * 1000).toDouble()
+                val inactiveColor = trackColor.copy(alpha = 0.2f)
+                val activeStrokeWidth = 4.dp.toPx()
+                val inactiveStrokeWidth = 2.dp.toPx()
+
                 for (i in 0 until points.size - 1) {
+                    val segStart = cumulativeDistances[i]
+                    val segEnd = cumulativeDistances[i + 1]
+                    val isActive = segEnd >= startMeters && segStart <= endMeters
                     drawLine(
-                        color = trackColor,
+                        color = if (isActive) trackColor else inactiveColor,
                         start = toOffset(points[i]),
                         end = toOffset(points[i + 1]),
-                        strokeWidth = 3.dp.toPx(),
+                        strokeWidth = if (isActive) activeStrokeWidth else inactiveStrokeWidth,
                         cap = StrokeCap.Round,
                     )
                 }
 
-                // Green dot: start of travel range (draggable)
-                val startPos = toOffset(positionAtMeters((startKm * 1000).toDouble()))
-                drawCircle(color = Color(0xFF4CAF50), radius = 8.dp.toPx(), center = startPos)
-                drawCircle(color = Color.White, radius = 4.dp.toPx(), center = startPos)
+                // Triangle marker: start of travel range (draggable)
+                val startPos = toOffset(positionAtMeters(startMeters))
+                val triSize = 10.dp.toPx()
+                val startPath = Path().apply {
+                    moveTo(startPos.x, startPos.y - triSize)
+                    lineTo(startPos.x - triSize * 0.866f, startPos.y + triSize * 0.5f)
+                    lineTo(startPos.x + triSize * 0.866f, startPos.y + triSize * 0.5f)
+                    close()
+                }
+                drawPath(startPath, color = Color(0xFF4CAF50))
+                // White inner triangle
+                val triInner = 5.dp.toPx()
+                val innerStartPath = Path().apply {
+                    moveTo(startPos.x, startPos.y - triInner)
+                    lineTo(startPos.x - triInner * 0.866f, startPos.y + triInner * 0.5f)
+                    lineTo(startPos.x + triInner * 0.866f, startPos.y + triInner * 0.5f)
+                    close()
+                }
+                drawPath(innerStartPath, color = Color.White)
 
-                // Blue dot: end of travel range (draggable)
-                val endPos = toOffset(positionAtMeters((endKm * 1000).toDouble()))
-                drawCircle(color = Color(0xFF2196F3), radius = 8.dp.toPx(), center = endPos)
-                drawCircle(color = Color.White, radius = 4.dp.toPx(), center = endPos)
+                // Square marker: end of travel range (draggable)
+                val endPos = toOffset(positionAtMeters(endMeters))
+                val sqSize = 8.dp.toPx()
+                drawRect(
+                    color = Color(0xFF2196F3),
+                    topLeft = Offset(endPos.x - sqSize, endPos.y - sqSize),
+                    size = Size(sqSize * 2, sqSize * 2),
+                )
+                val sqInner = 4.dp.toPx()
+                drawRect(
+                    color = Color.White,
+                    topLeft = Offset(endPos.x - sqInner, endPos.y - sqInner),
+                    size = Size(sqInner * 2, sqInner * 2),
+                )
 
                 // Red dot: current position (while mocking)
                 currentPoint?.let { cp ->
