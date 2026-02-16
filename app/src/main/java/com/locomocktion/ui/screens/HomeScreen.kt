@@ -4,6 +4,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -25,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.locomocktion.MainViewModel
 import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
+import com.locomocktion.gpx.distanceBetween
 import com.locomocktion.service.TravelMode
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -92,7 +95,12 @@ fun HomeScreen(viewModel: MainViewModel) {
             uiState.track?.let { track ->
                 TrackPreviewCard(
                     track = track,
+                    startKm = uiState.startKm,
+                    endKm = uiState.endKm,
                     currentPoint = currentPoint,
+                    onStartChange = viewModel::setStartKm,
+                    onEndChange = viewModel::setEndKm,
+                    isRunning = isRunning,
                 )
 
                 // Track range (start / end)
@@ -196,7 +204,58 @@ private fun FileSelectionCard(
 }
 
 @Composable
-private fun TrackPreviewCard(track: GpxTrack, currentPoint: TrackPoint?) {
+private fun TrackPreviewCard(
+    track: GpxTrack,
+    startKm: Float,
+    endKm: Float,
+    currentPoint: TrackPoint?,
+    onStartChange: (Float) -> Unit,
+    onEndChange: (Float) -> Unit,
+    isRunning: Boolean,
+) {
+    val points = track.points
+
+    // Pre-compute cumulative distances along the track
+    val cumulativeDistances = remember(track) {
+        val dists = mutableListOf(0.0)
+        for (i in 0 until points.size - 1) {
+            dists.add(dists.last() + distanceBetween(points[i], points[i + 1]))
+        }
+        dists
+    }
+    val totalDistMeters = cumulativeDistances.last()
+
+    // Pre-compute geographic bounds for coordinate mapping
+    val minLat = remember(track) { points.minOf { it.latitude } }
+    val maxLat = remember(track) { points.maxOf { it.latitude } }
+    val minLon = remember(track) { points.minOf { it.longitude } }
+    val maxLon = remember(track) { points.maxOf { it.longitude } }
+    val latRange = remember(track) { (maxLat - minLat).coerceAtLeast(0.0001) }
+    val lonRange = remember(track) { (maxLon - minLon).coerceAtLeast(0.0001) }
+
+    // Interpolate a TrackPoint at the given distance along the track
+    fun positionAtMeters(meters: Double): TrackPoint {
+        val m = meters.coerceIn(0.0, totalDistMeters)
+        for (i in 0 until points.size - 1) {
+            if (m <= cumulativeDistances[i + 1]) {
+                val segStart = cumulativeDistances[i]
+                val segLen = cumulativeDistances[i + 1] - segStart
+                if (segLen < 0.1) return points[i]
+                val f = ((m - segStart) / segLen).coerceIn(0.0, 1.0)
+                return TrackPoint(
+                    points[i].latitude + (points[i + 1].latitude - points[i].latitude) * f,
+                    points[i].longitude + (points[i + 1].longitude - points[i].longitude) * f,
+                )
+            }
+        }
+        return points.last()
+    }
+
+    // Use rememberUpdatedState so the pointer input closure always sees latest values
+    val currentStartKm by rememberUpdatedState(startKm)
+    val currentEndKm by rememberUpdatedState(endKm)
+    val currentIsRunning by rememberUpdatedState(isRunning)
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -207,70 +266,125 @@ private fun TrackPreviewCard(track: GpxTrack, currentPoint: TrackPoint?) {
             Spacer(modifier = Modifier.height(8.dp))
 
             val trackColor = MaterialTheme.colorScheme.primary
-            val dotColor = MaterialTheme.colorScheme.error
 
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp),
+                    .height(200.dp)
+                    .pointerInput(track) {
+                        val paddingPx = 16.dp.toPx()
+                        val w = size.width - 2 * paddingPx
+                        val h = size.height - 2 * paddingPx
+                        val hitRadiusPx = 24.dp.toPx()
+
+                        fun toScreen(p: TrackPoint): Offset {
+                            val x = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
+                            val y = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
+                            return Offset(x, y)
+                        }
+
+                        val screenPositions = points.map { toScreen(it) }
+
+                        fun nearestMetersOnTrack(touchPos: Offset): Double {
+                            var bestDistSq = Float.MAX_VALUE
+                            var bestMeters = 0.0
+                            for (i in 0 until screenPositions.size - 1) {
+                                val a = screenPositions[i]
+                                val b = screenPositions[i + 1]
+                                val abx = b.x - a.x
+                                val aby = b.y - a.y
+                                val abLenSq = abx * abx + aby * aby
+                                val t = if (abLenSq < 0.001f) 0f
+                                else (((touchPos.x - a.x) * abx + (touchPos.y - a.y) * aby) / abLenSq)
+                                    .coerceIn(0f, 1f)
+                                val px = a.x + abx * t
+                                val py = a.y + aby * t
+                                val dx = touchPos.x - px
+                                val dy = touchPos.y - py
+                                val distSq = dx * dx + dy * dy
+                                if (distSq < bestDistSq) {
+                                    bestDistSq = distSq
+                                    bestMeters = cumulativeDistances[i] +
+                                            (cumulativeDistances[i + 1] - cumulativeDistances[i]) * t.toDouble()
+                                }
+                            }
+                            return bestMeters
+                        }
+
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            if (currentIsRunning) return@awaitEachGesture
+
+                            val startPos = toScreen(positionAtMeters((currentStartKm * 1000).toDouble()))
+                            val endPos = toScreen(positionAtMeters((currentEndKm * 1000).toDouble()))
+
+                            val dStart = (down.position - startPos).getDistance()
+                            val dEnd = (down.position - endPos).getDistance()
+
+                            val target = when {
+                                dStart <= hitRadiusPx && dStart <= dEnd -> "start"
+                                dEnd <= hitRadiusPx -> "end"
+                                else -> null
+                            }
+
+                            if (target == null) return@awaitEachGesture
+
+                            // Consume the down event to prevent scroll from intercepting
+                            down.consume()
+
+                            do {
+                                val event = awaitPointerEvent()
+                                event.changes.forEach { change ->
+                                    if (change.pressed) {
+                                        change.consume()
+                                        val km = (nearestMetersOnTrack(change.position) / 1000).toFloat()
+                                        when (target) {
+                                            "start" -> onStartChange(km)
+                                            "end" -> onEndChange(km)
+                                        }
+                                    }
+                                }
+                            } while (event.changes.any { it.pressed })
+                        }
+                    },
             ) {
-                if (track.points.size < 2) return@Canvas
+                if (points.size < 2) return@Canvas
 
-                val minLat = track.points.minOf { it.latitude }
-                val maxLat = track.points.maxOf { it.latitude }
-                val minLon = track.points.minOf { it.longitude }
-                val maxLon = track.points.maxOf { it.longitude }
-
-                val latRange = (maxLat - minLat).coerceAtLeast(0.0001)
-                val lonRange = (maxLon - minLon).coerceAtLeast(0.0001)
-
-                val padding = 16.dp.toPx()
-                val w = size.width - 2 * padding
-                val h = size.height - 2 * padding
+                val paddingPx = 16.dp.toPx()
+                val w = size.width - 2 * paddingPx
+                val h = size.height - 2 * paddingPx
 
                 fun toOffset(p: TrackPoint): Offset {
-                    val x = ((p.longitude - minLon) / lonRange * w + padding).toFloat()
-                    val y = ((1 - (p.latitude - minLat) / latRange) * h + padding).toFloat()
+                    val x = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
+                    val y = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
                     return Offset(x, y)
                 }
 
                 // Draw track line
-                for (i in 0 until track.points.size - 1) {
+                for (i in 0 until points.size - 1) {
                     drawLine(
                         color = trackColor,
-                        start = toOffset(track.points[i]),
-                        end = toOffset(track.points[i + 1]),
+                        start = toOffset(points[i]),
+                        end = toOffset(points[i + 1]),
                         strokeWidth = 3.dp.toPx(),
                         cap = StrokeCap.Round,
                     )
                 }
 
-                // Start marker
-                drawCircle(
-                    color = Color(0xFF4CAF50),
-                    radius = 6.dp.toPx(),
-                    center = toOffset(track.points.first()),
-                )
+                // Green dot: start of travel range (draggable)
+                val startPos = toOffset(positionAtMeters((startKm * 1000).toDouble()))
+                drawCircle(color = Color(0xFF4CAF50), radius = 8.dp.toPx(), center = startPos)
+                drawCircle(color = Color.White, radius = 4.dp.toPx(), center = startPos)
 
-                // End marker
-                drawCircle(
-                    color = Color(0xFFF44336),
-                    radius = 6.dp.toPx(),
-                    center = toOffset(track.points.last()),
-                )
+                // Blue dot: end of travel range (draggable)
+                val endPos = toOffset(positionAtMeters((endKm * 1000).toDouble()))
+                drawCircle(color = Color(0xFF2196F3), radius = 8.dp.toPx(), center = endPos)
+                drawCircle(color = Color.White, radius = 4.dp.toPx(), center = endPos)
 
-                // Current position
+                // Red dot: current position (while mocking)
                 currentPoint?.let { cp ->
-                    drawCircle(
-                        color = dotColor,
-                        radius = 8.dp.toPx(),
-                        center = toOffset(cp),
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = 4.dp.toPx(),
-                        center = toOffset(cp),
-                    )
+                    drawCircle(color = Color(0xFFF44336), radius = 8.dp.toPx(), center = toOffset(cp))
+                    drawCircle(color = Color.White, radius = 4.dp.toPx(), center = toOffset(cp))
                 }
             }
         }
