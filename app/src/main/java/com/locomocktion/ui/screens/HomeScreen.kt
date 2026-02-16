@@ -1,0 +1,388 @@
+package com.locomocktion.ui.screens
+
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.locomocktion.MainViewModel
+import com.locomocktion.gpx.GpxTrack
+import com.locomocktion.gpx.TrackPoint
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(viewModel: MainViewModel) {
+    val uiState by viewModel.uiState.collectAsState()
+    val isRunning by viewModel.isRunning.collectAsState()
+    val progress by viewModel.progress.collectAsState()
+    val currentPoint by viewModel.currentPoint.collectAsState()
+    val context = LocalContext.current
+
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        val name = cursor?.use {
+            if (it.moveToFirst()) {
+                val idx = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) it.getString(idx) else null
+            } else null
+        }
+        viewModel.loadGpx(uri, name)
+    }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("LocoMocktion") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // File selection card
+            FileSelectionCard(
+                fileName = uiState.fileName,
+                track = uiState.track,
+                isRunning = isRunning,
+                onPickFile = { filePicker.launch(arrayOf("application/*", "*/*")) },
+            )
+
+            // Track preview
+            uiState.track?.let { track ->
+                TrackPreviewCard(
+                    track = track,
+                    currentPoint = currentPoint,
+                )
+            }
+
+            // Speed control
+            SpeedControlCard(
+                speedKmh = uiState.speedKmh,
+                onSpeedChange = viewModel::setSpeed,
+                isRunning = isRunning,
+            )
+
+            // Progress
+            if (isRunning) {
+                ProgressCard(progress = progress, currentPoint = currentPoint)
+            }
+
+            // Start/Stop button
+            MockControlButton(
+                isRunning = isRunning,
+                hasTrack = uiState.track != null,
+                onStart = viewModel::startMocking,
+                onStop = viewModel::stopMocking,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FileSelectionCard(
+    fileName: String?,
+    track: GpxTrack?,
+    isRunning: Boolean,
+    onPickFile: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "GPX Track",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (fileName != null && track != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Route,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(text = fileName, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = "${track.points.size} points · " +
+                                    "%.1f km".format(track.totalDistanceMeters / 1000),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            OutlinedButton(
+                onClick = onPickFile,
+                enabled = !isRunning,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.FileOpen, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (fileName == null) "Select GPX file" else "Change file")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackPreviewCard(track: GpxTrack, currentPoint: TrackPoint?) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = track.name ?: "Track Preview",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val trackColor = MaterialTheme.colorScheme.primary
+            val dotColor = MaterialTheme.colorScheme.error
+
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp),
+            ) {
+                if (track.points.size < 2) return@Canvas
+
+                val minLat = track.points.minOf { it.latitude }
+                val maxLat = track.points.maxOf { it.latitude }
+                val minLon = track.points.minOf { it.longitude }
+                val maxLon = track.points.maxOf { it.longitude }
+
+                val latRange = (maxLat - minLat).coerceAtLeast(0.0001)
+                val lonRange = (maxLon - minLon).coerceAtLeast(0.0001)
+
+                val padding = 16.dp.toPx()
+                val w = size.width - 2 * padding
+                val h = size.height - 2 * padding
+
+                fun toOffset(p: TrackPoint): Offset {
+                    val x = ((p.longitude - minLon) / lonRange * w + padding).toFloat()
+                    val y = ((1 - (p.latitude - minLat) / latRange) * h + padding).toFloat()
+                    return Offset(x, y)
+                }
+
+                // Draw track line
+                for (i in 0 until track.points.size - 1) {
+                    drawLine(
+                        color = trackColor,
+                        start = toOffset(track.points[i]),
+                        end = toOffset(track.points[i + 1]),
+                        strokeWidth = 3.dp.toPx(),
+                        cap = StrokeCap.Round,
+                    )
+                }
+
+                // Start marker
+                drawCircle(
+                    color = Color(0xFF4CAF50),
+                    radius = 6.dp.toPx(),
+                    center = toOffset(track.points.first()),
+                )
+
+                // End marker
+                drawCircle(
+                    color = Color(0xFFF44336),
+                    radius = 6.dp.toPx(),
+                    center = toOffset(track.points.last()),
+                )
+
+                // Current position
+                currentPoint?.let { cp ->
+                    drawCircle(
+                        color = dotColor,
+                        radius = 8.dp.toPx(),
+                        center = toOffset(cp),
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 4.dp.toPx(),
+                        center = toOffset(cp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpeedControlCard(
+    speedKmh: Float,
+    onSpeedChange: (Float) -> Unit,
+    isRunning: Boolean,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Speed",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "%.0f km/h".format(speedKmh),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Slider(
+                value = speedKmh,
+                onValueChange = onSpeedChange,
+                valueRange = 1f..200f,
+                steps = 0,
+            )
+
+            // Preset speed buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SpeedPreset("Walk\n5", 5f, onSpeedChange, Modifier.weight(1f))
+                SpeedPreset("Bike\n20", 20f, onSpeedChange, Modifier.weight(1f))
+                SpeedPreset("Car\n50", 50f, onSpeedChange, Modifier.weight(1f))
+                SpeedPreset("Fast\n120", 120f, onSpeedChange, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpeedPreset(
+    label: String,
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FilledTonalButton(
+        onClick = { onSpeedChange(speed) },
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        contentPadding = PaddingValues(4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+        )
+    }
+}
+
+@Composable
+private fun ProgressCard(progress: Float, currentPoint: TrackPoint?) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Mocking Active",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "%.1f%% complete".format(progress * 100),
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            currentPoint?.let { p ->
+                Text(
+                    text = "Lat: %.6f  Lon: %.6f".format(p.latitude, p.longitude),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MockControlButton(
+    isRunning: Boolean,
+    hasTrack: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Button(
+        onClick = if (isRunning) onStop else onStart,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp),
+        enabled = hasTrack,
+        colors = if (isRunning) {
+            ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            ButtonDefaults.buttonColors()
+        },
+    ) {
+        Icon(
+            imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+            contentDescription = null,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (isRunning) "Stop Mocking" else "Start Mocking",
+            style = MaterialTheme.typography.titleMedium,
+        )
+    }
+}
