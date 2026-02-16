@@ -1,6 +1,8 @@
 package com.locomocktion.ui.screens
 
+import android.content.Intent
 import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -29,6 +31,7 @@ import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
 import com.locomocktion.gpx.distanceBetween
 import com.locomocktion.service.TravelMode
+import com.locomocktion.util.isMockLocationEnabled
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,12 +58,23 @@ fun HomeScreen(viewModel: MainViewModel) {
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var showMockLocationDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
         }
+    }
+
+    if (showMockLocationDialog) {
+        MockLocationPermissionDialog(
+            onDismiss = { showMockLocationDialog = false },
+            onOpenSettings = {
+                showMockLocationDialog = false
+                context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+            },
+        )
     }
 
     Scaffold(
@@ -146,7 +160,13 @@ fun HomeScreen(viewModel: MainViewModel) {
             MockControlButton(
                 isRunning = isRunning,
                 hasTrack = uiState.track != null,
-                onStart = viewModel::startMocking,
+                onStart = {
+                    if (isMockLocationEnabled(context)) {
+                        viewModel.startMocking()
+                    } else {
+                        showMockLocationDialog = true
+                    }
+                },
                 onStop = viewModel::stopMocking,
             )
         }
@@ -466,8 +486,6 @@ private fun TravelModeCard(
     onModeChange: (TravelMode) -> Unit,
     isRunning: Boolean,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -477,44 +495,28 @@ private fun TravelModeCard(
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { if (!isRunning) expanded = it },
-            ) {
-                OutlinedTextField(
-                    value = travelMode.label,
-                    onValueChange = {},
-                    readOnly = true,
-                    enabled = !isRunning,
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
-                )
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                ) {
-                    TravelMode.entries.forEach { mode ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(mode.label)
-                                    Text(
-                                        mode.description,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                            onClick = {
-                                onModeChange(mode)
-                                expanded = false
-                            },
-                        )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                TravelMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = travelMode == mode,
+                        onClick = { onModeChange(mode) },
+                        enabled = !isRunning,
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = TravelMode.entries.size,
+                        ),
+                    ) {
+                        Text(mode.label)
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = travelMode.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -719,4 +721,32 @@ private fun MockControlButton(
             style = MaterialTheme.typography.titleMedium,
         )
     }
+}
+
+@Composable
+private fun MockLocationPermissionDialog(
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Mock Location Not Enabled") },
+        text = {
+            Text(
+                "This app needs to be set as the mock location app in Developer Options.\n\n" +
+                        "Go to Settings → Developer Options → Select mock location app → " +
+                        "choose LocoMocktion."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onOpenSettings) {
+                Text("Open Settings")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
