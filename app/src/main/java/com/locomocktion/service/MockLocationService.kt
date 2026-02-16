@@ -28,7 +28,6 @@ class MockLocationService : LifecycleService() {
         private const val CHANNEL_ID = "mock_location_channel"
         private const val NOTIFICATION_ID = 1
         private const val PROVIDER = LocationManager.GPS_PROVIDER
-        private const val UPDATE_INTERVAL_MS = 1000L
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
@@ -39,16 +38,33 @@ class MockLocationService : LifecycleService() {
         private val _currentPoint = MutableStateFlow<TrackPoint?>(null)
         val currentPoint: StateFlow<TrackPoint?> = _currentPoint
 
+        private val _distanceTraveled = MutableStateFlow(0.0)
+        val distanceTraveled: StateFlow<Double> = _distanceTraveled
+
         private var trackPoints: List<TrackPoint> = emptyList()
         private var speedMultiplier: Float = 1f
+        var updateIntervalMs: Long = 1000L
+            private set
+        private var startOffsetMeters: Double = 0.0
 
-        fun configure(points: List<TrackPoint>, speed: Float) {
+        fun configure(
+            points: List<TrackPoint>,
+            speed: Float,
+            intervalMs: Long,
+            offsetMeters: Double,
+        ) {
             trackPoints = points
             speedMultiplier = speed
+            updateIntervalMs = intervalMs
+            startOffsetMeters = offsetMeters
         }
 
         fun updateSpeed(speed: Float) {
             speedMultiplier = speed
+        }
+
+        fun updateInterval(ms: Long) {
+            updateIntervalMs = ms
         }
     }
 
@@ -123,23 +139,53 @@ class MockLocationService : LifecycleService() {
     private suspend fun walkTrack() {
         if (trackPoints.size < 2) return
 
-        // Walk along each segment, interpolating positions at regular intervals
-        var segmentIndex = 0
-        var segmentOffset = 0.0 // meters traveled within current segment
+        // Pre-compute cumulative distances for each segment boundary
+        val segmentDistances = (0 until trackPoints.lastIndex).map { i ->
+            distanceBetween(trackPoints[i], trackPoints[i + 1])
+        }
+        val totalDist = segmentDistances.sum()
+        if (totalDist < 0.1) return
 
+        // Find starting position from offset
+        var segmentIndex = 0
+        var segmentOffset = 0.0
+        var cumulativeDist = 0.0
+
+        if (startOffsetMeters > 0.0) {
+            var remaining = startOffsetMeters.coerceAtMost(totalDist)
+            for (i in segmentDistances.indices) {
+                if (remaining <= segmentDistances[i]) {
+                    segmentIndex = i
+                    segmentOffset = remaining
+                    break
+                }
+                remaining -= segmentDistances[i]
+                cumulativeDist += segmentDistances[i]
+                if (i == segmentDistances.lastIndex) {
+                    segmentIndex = i
+                    segmentOffset = segmentDistances[i]
+                }
+            }
+            cumulativeDist += segmentOffset
+        }
+
+        _distanceTraveled.value = cumulativeDist
+
+        // Walk along each segment, interpolating positions at the configured interval
         while (segmentIndex < trackPoints.size - 1) {
             val from = trackPoints[segmentIndex]
             val to = trackPoints[segmentIndex + 1]
-            val segmentDist = distanceBetween(from, to)
+            val segmentDist = segmentDistances[segmentIndex]
 
             if (segmentDist < 0.1) {
                 segmentIndex++
                 continue
             }
 
-            // How far to move this tick (meters)
+            // Read current settings each tick so live changes take effect
+            val intervalMs = updateIntervalMs
             val metersPerSecond = speedMultiplier.toDouble()
-            val stepMeters = metersPerSecond * (UPDATE_INTERVAL_MS / 1000.0)
+            val stepMeters = metersPerSecond * (intervalMs / 1000.0)
 
             // Interpolate position
             val fraction = (segmentOffset / segmentDist).coerceIn(0.0, 1.0)
@@ -154,21 +200,17 @@ class MockLocationService : LifecycleService() {
             val point = TrackPoint(lat, lon, ele)
             setMockLocation(point, bearing(from, to).toFloat())
             _currentPoint.value = point
+            _progress.value = (cumulativeDist / totalDist).toFloat().coerceIn(0f, 1f)
+            _distanceTraveled.value = cumulativeDist
 
-            // Calculate overall progress
-            val completedSegments = (0 until segmentIndex).sumOf { i ->
-                distanceBetween(trackPoints[i], trackPoints[i + 1])
-            }
-            val totalDist = (0 until trackPoints.lastIndex).sumOf { i ->
-                distanceBetween(trackPoints[i], trackPoints[i + 1])
-            }
-            _progress.value = ((completedSegments + segmentOffset) / totalDist).toFloat()
-
-            delay(UPDATE_INTERVAL_MS)
+            delay(intervalMs)
 
             segmentOffset += stepMeters
-            if (segmentOffset >= segmentDist) {
-                segmentOffset -= segmentDist
+            cumulativeDist += stepMeters
+
+            // Advance to next segment(s) if we've passed the current one
+            while (segmentIndex < trackPoints.size - 1 && segmentOffset >= segmentDistances[segmentIndex]) {
+                segmentOffset -= segmentDistances[segmentIndex]
                 segmentIndex++
             }
         }
@@ -179,6 +221,7 @@ class MockLocationService : LifecycleService() {
             _currentPoint.value = last
         }
         _progress.value = 1f
+        _distanceTraveled.value = totalDist
     }
 
     private fun setMockLocation(point: TrackPoint, bearing: Float) {
@@ -189,6 +232,7 @@ class MockLocationService : LifecycleService() {
                 point.elevation?.let { altitude = it }
                 accuracy = 3.0f
                 this.bearing = bearing
+                speed = speedMultiplier
                 time = System.currentTimeMillis()
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             }
@@ -212,6 +256,7 @@ class MockLocationService : LifecycleService() {
         _isRunning.value = false
         _progress.value = 0f
         _currentPoint.value = null
+        _distanceTraveled.value = 0.0
         try {
             locationManager.setTestProviderEnabled(PROVIDER, false)
             locationManager.removeTestProvider(PROVIDER)

@@ -17,6 +17,8 @@ data class UiState(
     val track: GpxTrack? = null,
     val fileName: String? = null,
     val speedKmh: Float = 20f,
+    val updateIntervalMs: Long = 1000L,
+    val startOffsetKm: Float = 0f,
     val error: String? = null,
 )
 
@@ -28,6 +30,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     val isRunning: StateFlow<Boolean> = MockLocationService.isRunning
     val progress: StateFlow<Float> = MockLocationService.progress
     val currentPoint: StateFlow<TrackPoint?> = MockLocationService.currentPoint
+    val distanceTraveled: StateFlow<Double> = MockLocationService.distanceTraveled
 
     fun loadGpx(uri: Uri, displayName: String?) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -43,6 +46,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                     it.copy(
                         track = track,
                         fileName = displayName ?: track.name ?: "Unknown",
+                        startOffsetKm = 0f,
                         error = null,
                     )
                 }
@@ -54,14 +58,29 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun setSpeed(kmh: Float) {
         _uiState.update { it.copy(speedKmh = kmh) }
-        // Speed in m/s for the service
         MockLocationService.updateSpeed(kmh / 3.6f)
     }
 
-    fun startMocking() {
+    fun setUpdateInterval(ms: Long) {
+        _uiState.update { it.copy(updateIntervalMs = ms) }
+        MockLocationService.updateInterval(ms)
+    }
+
+    fun setStartOffset(km: Float) {
         val track = _uiState.value.track ?: return
-        val speedMs = _uiState.value.speedKmh / 3.6f
-        MockLocationService.configure(track.points, speedMs)
+        val maxKm = (track.totalDistanceMeters / 1000).toFloat()
+        _uiState.update { it.copy(startOffsetKm = km.coerceIn(0f, maxKm)) }
+    }
+
+    fun startMocking() {
+        val state = _uiState.value
+        val track = state.track ?: return
+        MockLocationService.configure(
+            points = track.points,
+            speed = state.speedKmh / 3.6f,
+            intervalMs = state.updateIntervalMs,
+            offsetMeters = (state.startOffsetKm * 1000).toDouble(),
+        )
 
         val intent = Intent(app, MockLocationService::class.java)
         app.startForegroundService(intent)

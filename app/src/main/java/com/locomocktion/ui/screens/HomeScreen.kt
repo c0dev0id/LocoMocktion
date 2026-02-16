@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.locomocktion.MainViewModel
 import com.locomocktion.gpx.GpxTrack
@@ -31,6 +33,7 @@ fun HomeScreen(viewModel: MainViewModel) {
     val isRunning by viewModel.isRunning.collectAsState()
     val progress by viewModel.progress.collectAsState()
     val currentPoint by viewModel.currentPoint.collectAsState()
+    val distanceTraveled by viewModel.distanceTraveled.collectAsState()
     val context = LocalContext.current
 
     val filePicker = rememberLauncherForActivityResult(
@@ -90,18 +93,35 @@ fun HomeScreen(viewModel: MainViewModel) {
                     track = track,
                     currentPoint = currentPoint,
                 )
+
+                // Start offset input
+                StartOffsetCard(
+                    offsetKm = uiState.startOffsetKm,
+                    totalDistanceKm = track.totalDistanceMeters / 1000.0,
+                    onOffsetChange = viewModel::setStartOffset,
+                    isRunning = isRunning,
+                )
             }
 
             // Speed control
             SpeedControlCard(
                 speedKmh = uiState.speedKmh,
                 onSpeedChange = viewModel::setSpeed,
-                isRunning = isRunning,
+            )
+
+            // Update rate control
+            UpdateRateCard(
+                intervalMs = uiState.updateIntervalMs,
+                onIntervalChange = viewModel::setUpdateInterval,
             )
 
             // Progress
             if (isRunning) {
-                ProgressCard(progress = progress, currentPoint = currentPoint)
+                ProgressCard(
+                    progress = progress,
+                    currentPoint = currentPoint,
+                    distanceTraveledMeters = distanceTraveled,
+                )
             }
 
             // Start/Stop button
@@ -143,7 +163,7 @@ private fun FileSelectionCard(
                         Text(text = fileName, style = MaterialTheme.typography.bodyLarge)
                         Text(
                             text = "${track.points.size} points · " +
-                                    "%.1f km".format(track.totalDistanceMeters / 1000),
+                                    "%.2f km".format(track.totalDistanceMeters / 1000),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -248,10 +268,59 @@ private fun TrackPreviewCard(track: GpxTrack, currentPoint: TrackPoint?) {
 }
 
 @Composable
+private fun StartOffsetCard(
+    offsetKm: Float,
+    totalDistanceKm: Double,
+    onOffsetChange: (Float) -> Unit,
+    isRunning: Boolean,
+) {
+    var textValue by remember(offsetKm) {
+        mutableStateOf(if (offsetKm == 0f) "" else "%.2f".format(offsetKm))
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Start Offset",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Enter a distance to resume the track from that point",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = textValue,
+                onValueChange = { input ->
+                    textValue = input
+                    val parsed = input.toFloatOrNull()
+                    if (parsed != null) {
+                        onOffsetChange(parsed)
+                    } else if (input.isEmpty()) {
+                        onOffsetChange(0f)
+                    }
+                },
+                label = { Text("Distance from start (km)") },
+                supportingText = {
+                    Text("Track total: %.2f km".format(totalDistanceKm))
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                enabled = !isRunning,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
 private fun SpeedControlCard(
     speedKmh: Float,
     onSpeedChange: (Float) -> Unit,
-    isRunning: Boolean,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -316,8 +385,60 @@ private fun SpeedPreset(
     }
 }
 
+private data class IntervalOption(val label: String, val ms: Long)
+
+private val intervalOptions = listOf(
+    IntervalOption("250ms", 250L),
+    IntervalOption("500ms", 500L),
+    IntervalOption("750ms", 750L),
+    IntervalOption("1s", 1000L),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ProgressCard(progress: Float, currentPoint: TrackPoint?) {
+private fun UpdateRateCard(
+    intervalMs: Long,
+    onIntervalChange: (Long) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Update Rate",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Faster rates give smoother movement",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                intervalOptions.forEachIndexed { index, option ->
+                    SegmentedButton(
+                        selected = intervalMs == option.ms,
+                        onClick = { onIntervalChange(option.ms) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = intervalOptions.size,
+                        ),
+                    ) {
+                        Text(option.label)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgressCard(
+    progress: Float,
+    currentPoint: TrackPoint?,
+    distanceTraveledMeters: Double,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -338,10 +459,21 @@ private fun ProgressCard(progress: Float, currentPoint: TrackPoint?) {
             )
             Spacer(modifier = Modifier.height(4.dp))
 
-            Text(
-                text = "%.1f%% complete".format(progress * 100),
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "%.1f%% complete".format(progress * 100),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = "%.2f km traveled".format(distanceTraveledMeters / 1000),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
 
             currentPoint?.let { p ->
                 Text(
