@@ -607,6 +607,10 @@ private fun TrackPreviewCard(
                 // Draw track line: active range in full color, inactive in faded
                 val startMeters = (startKm * 1000).toDouble()
                 val endMeters = (endKm * 1000).toDouble()
+                val lowMeters = minOf(startMeters, endMeters)
+                val highMeters = maxOf(startMeters, endMeters)
+                val rangeMeters = highMeters - lowMeters
+                val isReversed = startMeters > endMeters
                 val inactiveColor = trackColor.copy(alpha = 0.2f)
                 val activeStrokeWidth = 4.dp.toPx()
                 val inactiveStrokeWidth = 2.dp.toPx()
@@ -614,7 +618,7 @@ private fun TrackPreviewCard(
                 for (i in 0 until points.size - 1) {
                     val segStart = cumulativeDistances[i]
                     val segEnd = cumulativeDistances[i + 1]
-                    val isActive = segEnd >= startMeters && segStart <= endMeters
+                    val isActive = segEnd >= lowMeters && segStart <= highMeters
                     drawLine(
                         color = if (isActive) trackColor else inactiveColor,
                         start = toOffset(points[i]),
@@ -624,31 +628,57 @@ private fun TrackPreviewCard(
                     )
                 }
 
+                // --- Track endpoint bars (perpendicular to track direction) ---
+                val endpointBarLen = 8.dp.toPx()
+                val endpointStroke = 3.dp.toPx()
+                val endpointColor = trackColor.copy(alpha = 0.5f)
+
+                if (points.size >= 2) {
+                    val p0 = toOffset(points[0])
+                    val p1 = toOffset(points[1])
+                    val dx0 = p1.x - p0.x
+                    val dy0 = p1.y - p0.y
+                    val len0 = kotlin.math.sqrt(dx0 * dx0 + dy0 * dy0)
+                    if (len0 > 0.1f) {
+                        val perpX = -dy0 / len0 * endpointBarLen
+                        val perpY = dx0 / len0 * endpointBarLen
+                        drawLine(endpointColor, Offset(p0.x + perpX, p0.y + perpY), Offset(p0.x - perpX, p0.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
+                    }
+
+                    val pN = toOffset(points.last())
+                    val pPrev = toOffset(points[points.size - 2])
+                    val dxN = pN.x - pPrev.x
+                    val dyN = pN.y - pPrev.y
+                    val lenN = kotlin.math.sqrt(dxN * dxN + dyN * dyN)
+                    if (lenN > 0.1f) {
+                        val perpX = -dyN / lenN * endpointBarLen
+                        val perpY = dxN / lenN * endpointBarLen
+                        drawLine(endpointColor, Offset(pN.x + perpX, pN.y + perpY), Offset(pN.x - perpX, pN.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
+                    }
+                }
+
                 // --- Direction arrows along active segment ---
-                val rangeMeters = endMeters - startMeters
                 if (rangeMeters > 1.0) {
                     val arrowLen = 8.dp.toPx()
                     val arrowHalfW = 5.dp.toPx()
-                    // Lookahead distance: 1% of range or 50m, whichever is larger
                     val lookAhead = (rangeMeters * 0.01).coerceAtLeast(50.0)
-                    // Place arrows at ~25%, 50%, 75% of the active range
                     val arrowFractions = listOf(0.25f, 0.5f, 0.75f)
                     for (frac in arrowFractions) {
-                        val m = startMeters + rangeMeters * frac
-                        val mAhead = (m + lookAhead).coerceAtMost(endMeters)
-                        if (mAhead - m < 1.0) continue
+                        val m = lowMeters + rangeMeters * frac
+                        // Look in the travel direction: forward along track, or backward if reversed
+                        val mAhead = if (isReversed) (m - lookAhead).coerceAtLeast(lowMeters)
+                                     else (m + lookAhead).coerceAtMost(highMeters)
+                        if (kotlin.math.abs(mAhead - m) < 1.0) continue
                         val pt = toOffset(positionAtMeters(m))
                         val ptAhead = toOffset(positionAtMeters(mAhead))
                         val dx = ptAhead.x - pt.x
                         val dy = ptAhead.y - pt.y
                         val len = kotlin.math.sqrt(dx * dx + dy * dy)
                         if (len < 0.1f) continue
-                        // Unit direction vector and perpendicular
                         val ux = dx / len
                         val uy = dy / len
                         val px = -uy
                         val py = ux
-                        // Arrow tip ahead of point, base behind
                         val tipX = pt.x + ux * arrowLen
                         val tipY = pt.y + uy * arrowLen
                         val baseLeftX = pt.x - ux * arrowLen * 0.3f + px * arrowHalfW
@@ -662,7 +692,6 @@ private fun TrackPreviewCard(
                             close()
                         }
                         drawPath(arrowPath, color = Color.White)
-                        // Draw a darker outline for visibility on light backgrounds
                         drawPath(
                             arrowPath,
                             color = trackColor,
@@ -671,7 +700,7 @@ private fun TrackPreviewCard(
                     }
 
                     // Distance label at midpoint of active range
-                    val midPt = toOffset(positionAtMeters(startMeters + rangeMeters * 0.5))
+                    val midPt = toOffset(positionAtMeters(lowMeters + rangeMeters * 0.5))
                     val distLabel = "%.1f km".format(rangeMeters / 1000.0)
                     val distPaint = android.graphics.Paint().apply {
                         color = 0xFF333333.toInt()

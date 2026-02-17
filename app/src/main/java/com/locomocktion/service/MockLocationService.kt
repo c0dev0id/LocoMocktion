@@ -165,16 +165,17 @@ class MockLocationService : LifecycleService() {
         if (totalDist < 0.1) return
 
         val startMeters = startOffsetMeters.coerceIn(0.0, totalDist)
-        val endMeters = endOffsetMeters.coerceIn(0.0, totalDist).coerceAtLeast(startMeters)
-        val rangeMeters = endMeters - startMeters
+        val endMeters = endOffsetMeters.coerceIn(0.0, totalDist)
+        val rangeMeters = kotlin.math.abs(endMeters - startMeters)
         if (rangeMeters < 0.1) return
+        val forward = endMeters >= startMeters
 
         var totalTraveled = 0.0
 
         while (true) {
             totalTraveled = walkBetween(
                 startMeters, endMeters, segmentDistances,
-                rangeMeters, totalTraveled, forward = true,
+                rangeMeters, totalTraveled, forward = forward,
             )
 
             when (travelMode) {
@@ -184,7 +185,7 @@ class MockLocationService : LifecycleService() {
                     delay(3000)
                     totalTraveled = walkBetween(
                         endMeters, startMeters, segmentDistances,
-                        rangeMeters, totalTraveled, forward = false,
+                        rangeMeters, totalTraveled, forward = !forward,
                     )
                     delay(3000)
                 }
