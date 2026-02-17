@@ -73,24 +73,16 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setStartKm(km: Float) {
         val track = _uiState.value.track ?: return
         val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        val clamped = km.coerceIn(0f, maxKm)
         _uiState.update {
-            it.copy(
-                startKm = clamped,
-                endKm = it.endKm.coerceAtLeast(clamped),
-            )
+            it.copy(startKm = km.coerceIn(0f, it.endKm.coerceAtMost(maxKm)))
         }
     }
 
     fun setEndKm(km: Float) {
         val track = _uiState.value.track ?: return
         val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        val clamped = km.coerceIn(0f, maxKm)
         _uiState.update {
-            it.copy(
-                endKm = clamped,
-                startKm = it.startKm.coerceAtMost(clamped),
-            )
+            it.copy(endKm = km.coerceIn(it.startKm.coerceAtLeast(0f), maxKm))
         }
     }
 

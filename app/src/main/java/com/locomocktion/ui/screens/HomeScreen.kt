@@ -24,6 +24,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -406,6 +407,73 @@ private fun TrackPreviewCard(
                     )
                 }
 
+                // --- Direction arrows along active segment ---
+                val rangeMeters = endMeters - startMeters
+                if (rangeMeters > 1.0) {
+                    val arrowLen = 5.dp.toPx()
+                    val arrowHalfW = 3.dp.toPx()
+                    // Place arrows at ~25%, 50%, 75% of the active range
+                    val arrowFractions = listOf(0.25f, 0.5f, 0.75f)
+                    for (frac in arrowFractions) {
+                        val m = startMeters + rangeMeters * frac
+                        val mAhead = (m + 1.0).coerceAtMost(endMeters)
+                        val pt = toOffset(positionAtMeters(m))
+                        val ptAhead = toOffset(positionAtMeters(mAhead))
+                        val dx = ptAhead.x - pt.x
+                        val dy = ptAhead.y - pt.y
+                        val len = kotlin.math.sqrt(dx * dx + dy * dy)
+                        if (len < 0.5f) continue
+                        // Unit direction vector and perpendicular
+                        val ux = dx / len
+                        val uy = dy / len
+                        val px = -uy
+                        val py = ux
+                        // Arrow tip ahead of point, base behind
+                        val tipX = pt.x + ux * arrowLen
+                        val tipY = pt.y + uy * arrowLen
+                        val baseLeftX = pt.x - ux * arrowLen * 0.3f + px * arrowHalfW
+                        val baseLeftY = pt.y - uy * arrowLen * 0.3f + py * arrowHalfW
+                        val baseRightX = pt.x - ux * arrowLen * 0.3f - px * arrowHalfW
+                        val baseRightY = pt.y - uy * arrowLen * 0.3f - py * arrowHalfW
+                        val arrowPath = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(tipX, tipY)
+                            lineTo(baseLeftX, baseLeftY)
+                            lineTo(baseRightX, baseRightY)
+                            close()
+                        }
+                        drawPath(arrowPath, color = trackColor)
+                    }
+
+                    // Distance label at midpoint of active range
+                    val midPt = toOffset(positionAtMeters(startMeters + rangeMeters * 0.5))
+                    val distLabel = "%.1f km".format(rangeMeters / 1000.0)
+                    val distPaint = android.graphics.Paint().apply {
+                        color = 0xFF333333.toInt()
+                        textSize = 9.sp.toPx()
+                        isAntiAlias = true
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    }
+                    val distTextW = distPaint.measureText(distLabel)
+                    val distBgPaint = android.graphics.Paint().apply {
+                        color = 0xCCFFFFFF.toInt()
+                        isAntiAlias = true
+                    }
+                    val labelY = midPt.y - 10.dp.toPx()
+                    drawContext.canvas.nativeCanvas.drawRoundRect(
+                        midPt.x - distTextW / 2 - 4.dp.toPx(),
+                        labelY - 9.sp.toPx(),
+                        midPt.x + distTextW / 2 + 4.dp.toPx(),
+                        labelY + 3.dp.toPx(),
+                        4.dp.toPx(), 4.dp.toPx(), distBgPaint,
+                    )
+                    drawContext.canvas.nativeCanvas.drawText(
+                        distLabel,
+                        midPt.x - distTextW / 2,
+                        labelY,
+                        distPaint,
+                    )
+                }
+
                 // --- Start flag marker (draggable) ---
                 val startPos = toOffset(positionAtMeters(startMeters))
                 val flagPole = 28.dp.toPx()
@@ -540,11 +608,17 @@ private fun TrackRangeCard(
     onEndChange: (Float) -> Unit,
     isRunning: Boolean,
 ) {
-    var startText by remember(startKm) {
-        mutableStateOf(if (startKm == 0f) "" else "%.2f".format(startKm))
+    var startText by remember { mutableStateOf(if (startKm == 0f) "" else "%.2f".format(startKm)) }
+    var endText by remember { mutableStateOf("%.2f".format(endKm)) }
+    var startFocused by remember { mutableStateOf(false) }
+    var endFocused by remember { mutableStateOf(false) }
+
+    // Sync from model only when the field is NOT focused (e.g. drag updates)
+    LaunchedEffect(startKm) {
+        if (!startFocused) startText = if (startKm == 0f) "" else "%.2f".format(startKm)
     }
-    var endText by remember(endKm) {
-        mutableStateOf("%.2f".format(endKm))
+    LaunchedEffect(endKm) {
+        if (!endFocused) endText = "%.2f".format(endKm)
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -578,7 +652,14 @@ private fun TrackRangeCard(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     enabled = !isRunning,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { state ->
+                            startFocused = state.isFocused
+                            if (!state.isFocused) {
+                                startText = if (startKm == 0f) "" else "%.2f".format(startKm)
+                            }
+                        },
                 )
                 OutlinedTextField(
                     value = endText,
@@ -592,7 +673,14 @@ private fun TrackRangeCard(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     enabled = !isRunning,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { state ->
+                            endFocused = state.isFocused
+                            if (!state.isFocused) {
+                                endText = "%.2f".format(endKm)
+                            }
+                        },
                 )
             }
         }
