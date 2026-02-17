@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.locomocktion.MainViewModel
 import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
@@ -298,7 +299,7 @@ private fun TrackPreviewCard(
                         val paddingPx = 16.dp.toPx()
                         val w = size.width - 2 * paddingPx
                         val h = size.height - 2 * paddingPx
-                        val hitRadiusPx = 24.dp.toPx()
+                        val hitRadiusPx = 32.dp.toPx()
 
                         fun toScreen(p: TrackPoint): Offset {
                             val x = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
@@ -405,39 +406,119 @@ private fun TrackPreviewCard(
                     )
                 }
 
-                // Triangle marker: start of travel range (draggable)
+                // --- Start flag marker (draggable) ---
                 val startPos = toOffset(positionAtMeters(startMeters))
-                val triSize = 10.dp.toPx()
-                val startPath = Path().apply {
-                    moveTo(startPos.x, startPos.y - triSize)
-                    lineTo(startPos.x - triSize * 0.866f, startPos.y + triSize * 0.5f)
-                    lineTo(startPos.x + triSize * 0.866f, startPos.y + triSize * 0.5f)
-                    close()
-                }
-                drawPath(startPath, color = Color(0xFF4CAF50))
-                // White inner triangle
-                val triInner = 5.dp.toPx()
-                val innerStartPath = Path().apply {
-                    moveTo(startPos.x, startPos.y - triInner)
-                    lineTo(startPos.x - triInner * 0.866f, startPos.y + triInner * 0.5f)
-                    lineTo(startPos.x + triInner * 0.866f, startPos.y + triInner * 0.5f)
-                    close()
-                }
-                drawPath(innerStartPath, color = Color.White)
+                val flagPole = 28.dp.toPx()
+                val flagW = 16.dp.toPx()
+                val flagH = 12.dp.toPx()
+                val poleWidth = 2.5f.dp.toPx()
+                val baseR = 5.dp.toPx()
+                val startGreen = Color(0xFF4CAF50)
 
-                // Square marker: end of travel range (draggable)
-                val endPos = toOffset(positionAtMeters(endMeters))
-                val sqSize = 8.dp.toPx()
-                drawRect(
-                    color = Color(0xFF2196F3),
-                    topLeft = Offset(endPos.x - sqSize, endPos.y - sqSize),
-                    size = Size(sqSize * 2, sqSize * 2),
+                // Pole
+                drawLine(
+                    color = startGreen,
+                    start = Offset(startPos.x, startPos.y),
+                    end = Offset(startPos.x, startPos.y - flagPole),
+                    strokeWidth = poleWidth,
+                    cap = StrokeCap.Round,
                 )
-                val sqInner = 4.dp.toPx()
+                // Flag (filled rectangle at top of pole)
                 drawRect(
-                    color = Color.White,
-                    topLeft = Offset(endPos.x - sqInner, endPos.y - sqInner),
-                    size = Size(sqInner * 2, sqInner * 2),
+                    color = startGreen,
+                    topLeft = Offset(startPos.x, startPos.y - flagPole),
+                    size = Size(flagW, flagH),
+                )
+                // Checkerboard pattern on flag (2x2 grid)
+                val cellW = flagW / 2f
+                val cellH = flagH / 2f
+                val flagTop = startPos.y - flagPole
+                drawRect(color = Color.White, topLeft = Offset(startPos.x, flagTop), size = Size(cellW, cellH))
+                drawRect(color = Color.White, topLeft = Offset(startPos.x + cellW, flagTop + cellH), size = Size(cellW, cellH))
+                // Base circle for grab handle
+                drawCircle(color = startGreen, radius = baseR, center = startPos)
+                drawCircle(color = Color.White, radius = baseR * 0.5f, center = startPos)
+
+                // --- End flag marker (draggable) ---
+                val endPos = toOffset(positionAtMeters(endMeters))
+                val endBlue = Color(0xFF2196F3)
+
+                // Pole
+                drawLine(
+                    color = endBlue,
+                    start = Offset(endPos.x, endPos.y),
+                    end = Offset(endPos.x, endPos.y - flagPole),
+                    strokeWidth = poleWidth,
+                    cap = StrokeCap.Round,
+                )
+                // Flag (filled rectangle at top of pole)
+                drawRect(
+                    color = endBlue,
+                    topLeft = Offset(endPos.x - flagW, endPos.y - flagPole),
+                    size = Size(flagW, flagH),
+                )
+                // Checkered finish pattern on flag (2x2 grid)
+                val endFlagTop = endPos.y - flagPole
+                drawRect(color = Color.White, topLeft = Offset(endPos.x - flagW, endFlagTop), size = Size(cellW, cellH))
+                drawRect(color = Color.White, topLeft = Offset(endPos.x - cellW, endFlagTop + cellH), size = Size(cellW, cellH))
+                // Base circle for grab handle
+                drawCircle(color = endBlue, radius = baseR, center = endPos)
+                drawCircle(color = Color.White, radius = baseR * 0.5f, center = endPos)
+
+                // --- Km labels using native canvas ---
+                val nativeCanvas = drawContext.canvas.nativeCanvas
+                val textSizePx = 10.sp.toPx()
+                val startLabel = "%.1f km".format(startKm)
+                val endLabel = "%.1f km".format(endKm)
+
+                val startLabelPaint = android.graphics.Paint().apply {
+                    color = 0xFF2E7D32.toInt() // dark green
+                    this.textSize = textSizePx
+                    isAntiAlias = true
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                }
+                val endLabelPaint = android.graphics.Paint().apply {
+                    color = 0xFF1565C0.toInt() // dark blue
+                    this.textSize = textSizePx
+                    isAntiAlias = true
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                }
+
+                // Draw background + text for start label (below base circle)
+                val labelOffY = baseR + textSizePx + 2.dp.toPx()
+                val startTextW = startLabelPaint.measureText(startLabel)
+                val bgPaint = android.graphics.Paint().apply {
+                    color = 0xDDFFFFFF.toInt()
+                    isAntiAlias = true
+                }
+                nativeCanvas.drawRoundRect(
+                    startPos.x - startTextW / 2 - 3.dp.toPx(),
+                    startPos.y + labelOffY - textSizePx,
+                    startPos.x + startTextW / 2 + 3.dp.toPx(),
+                    startPos.y + labelOffY + 3.dp.toPx(),
+                    4.dp.toPx(), 4.dp.toPx(), bgPaint,
+                )
+                nativeCanvas.drawText(
+                    startLabel,
+                    startPos.x - startTextW / 2,
+                    startPos.y + labelOffY,
+                    startLabelPaint,
+                )
+
+                // Draw background + text for end label (below base circle)
+                val endTextW = endLabelPaint.measureText(endLabel)
+                nativeCanvas.drawRoundRect(
+                    endPos.x - endTextW / 2 - 3.dp.toPx(),
+                    endPos.y + labelOffY - textSizePx,
+                    endPos.x + endTextW / 2 + 3.dp.toPx(),
+                    endPos.y + labelOffY + 3.dp.toPx(),
+                    4.dp.toPx(), 4.dp.toPx(), bgPaint,
+                )
+                nativeCanvas.drawText(
+                    endLabel,
+                    endPos.x - endTextW / 2,
+                    endPos.y + labelOffY,
+                    endLabelPaint,
                 )
 
                 // Red dot: current position (while mocking)
