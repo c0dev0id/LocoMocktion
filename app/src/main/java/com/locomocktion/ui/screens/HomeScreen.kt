@@ -712,7 +712,6 @@ private fun SpeedPreset(
 private data class IntervalOption(val label: String, val ms: Long)
 
 private val intervalOptions = listOf(
-    IntervalOption("100ms", 100L),
     IntervalOption("250ms", 250L),
     IntervalOption("500ms", 500L),
     IntervalOption("750ms", 750L),
