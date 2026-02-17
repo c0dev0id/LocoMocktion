@@ -410,19 +410,22 @@ private fun TrackPreviewCard(
                 // --- Direction arrows along active segment ---
                 val rangeMeters = endMeters - startMeters
                 if (rangeMeters > 1.0) {
-                    val arrowLen = 5.dp.toPx()
-                    val arrowHalfW = 3.dp.toPx()
+                    val arrowLen = 8.dp.toPx()
+                    val arrowHalfW = 5.dp.toPx()
+                    // Lookahead distance: 1% of range or 50m, whichever is larger
+                    val lookAhead = (rangeMeters * 0.01).coerceAtLeast(50.0)
                     // Place arrows at ~25%, 50%, 75% of the active range
                     val arrowFractions = listOf(0.25f, 0.5f, 0.75f)
                     for (frac in arrowFractions) {
                         val m = startMeters + rangeMeters * frac
-                        val mAhead = (m + 1.0).coerceAtMost(endMeters)
+                        val mAhead = (m + lookAhead).coerceAtMost(endMeters)
+                        if (mAhead - m < 1.0) continue
                         val pt = toOffset(positionAtMeters(m))
                         val ptAhead = toOffset(positionAtMeters(mAhead))
                         val dx = ptAhead.x - pt.x
                         val dy = ptAhead.y - pt.y
                         val len = kotlin.math.sqrt(dx * dx + dy * dy)
-                        if (len < 0.5f) continue
+                        if (len < 0.1f) continue
                         // Unit direction vector and perpendicular
                         val ux = dx / len
                         val uy = dy / len
@@ -441,7 +444,13 @@ private fun TrackPreviewCard(
                             lineTo(baseRightX, baseRightY)
                             close()
                         }
-                        drawPath(arrowPath, color = trackColor)
+                        drawPath(arrowPath, color = Color.White)
+                        // Draw a darker outline for visibility on light backgrounds
+                        drawPath(
+                            arrowPath,
+                            color = trackColor,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f.dp.toPx()),
+                        )
                     }
 
                     // Distance label at midpoint of active range
