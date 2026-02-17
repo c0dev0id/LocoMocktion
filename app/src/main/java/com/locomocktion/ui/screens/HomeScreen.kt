@@ -1,6 +1,7 @@
 package com.locomocktion.ui.screens
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -26,7 +27,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -64,6 +67,7 @@ fun HomeScreen(viewModel: MainViewModel) {
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showMockLocationDialog by remember { mutableStateOf(false) }
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
@@ -82,35 +86,173 @@ fun HomeScreen(viewModel: MainViewModel) {
         )
     }
 
+    val onPickFile = { filePicker.launch(arrayOf("application/*", "*/*")) }
+    val onStart = {
+        if (isMockLocationEnabled(context)) {
+            viewModel.startMocking()
+        } else {
+            showMockLocationDialog = true
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("LocoMocktion") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                ),
-            )
+            if (!isLandscape) {
+                TopAppBar(
+                    title = { Text("LocoMocktion") },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
+        if (isLandscape) {
+            LandscapeContent(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                uiState = uiState,
+                isRunning = isRunning,
+                progress = progress,
+                currentPoint = currentPoint,
+                distanceTraveled = distanceTraveled,
+                viewModel = viewModel,
+                onPickFile = onPickFile,
+                onStart = onStart,
+                onStop = viewModel::stopMocking,
+            )
+        } else {
+            PortraitContent(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                uiState = uiState,
+                isRunning = isRunning,
+                progress = progress,
+                currentPoint = currentPoint,
+                distanceTraveled = distanceTraveled,
+                viewModel = viewModel,
+                onPickFile = onPickFile,
+                onStart = onStart,
+                onStop = viewModel::stopMocking,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PortraitContent(
+    modifier: Modifier,
+    uiState: com.locomocktion.UiState,
+    isRunning: Boolean,
+    progress: Float,
+    currentPoint: TrackPoint?,
+    distanceTraveled: Double,
+    viewModel: MainViewModel,
+    onPickFile: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        FileSelectionCard(
+            fileName = uiState.fileName,
+            track = uiState.track,
+            isRunning = isRunning,
+            onPickFile = onPickFile,
+        )
+
+        uiState.track?.let { track ->
+            TrackPreviewCard(
+                track = track,
+                startKm = uiState.startKm,
+                endKm = uiState.endKm,
+                currentPoint = currentPoint,
+                onStartChange = viewModel::setStartKm,
+                onEndChange = viewModel::setEndKm,
+                isRunning = isRunning,
+            )
+            TrackRangeCard(
+                startKm = uiState.startKm,
+                endKm = uiState.endKm,
+                totalDistanceKm = track.totalDistanceMeters / 1000.0,
+                onStartChange = viewModel::setStartKm,
+                onEndChange = viewModel::setEndKm,
+                isRunning = isRunning,
+            )
+            TravelModeCard(
+                travelMode = uiState.travelMode,
+                onModeChange = viewModel::setTravelMode,
+                isRunning = isRunning,
+            )
+        }
+
+        SpeedControlCard(
+            speedKmh = uiState.speedKmh,
+            onSpeedChange = viewModel::setSpeed,
+        )
+        UpdateRateCard(
+            intervalMs = uiState.updateIntervalMs,
+            onIntervalChange = viewModel::setUpdateInterval,
+        )
+
+        if (isRunning) {
+            ProgressCard(
+                progress = progress,
+                currentPoint = currentPoint,
+                distanceTraveledMeters = distanceTraveled,
+            )
+        }
+
+        MockControlButton(
+            isRunning = isRunning,
+            hasTrack = uiState.track != null,
+            onStart = onStart,
+            onStop = onStop,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LandscapeContent(
+    modifier: Modifier,
+    uiState: com.locomocktion.UiState,
+    isRunning: Boolean,
+    progress: Float,
+    currentPoint: TrackPoint?,
+    distanceTraveled: Double,
+    viewModel: MainViewModel,
+    onPickFile: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Row(
+        modifier = modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // ===== LEFT PANE: Map + File =====
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .weight(0.55f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // File selection card
             FileSelectionCard(
                 fileName = uiState.fileName,
                 track = uiState.track,
                 isRunning = isRunning,
-                onPickFile = { filePicker.launch(arrayOf("application/*", "*/*")) },
+                onPickFile = onPickFile,
+                isCompact = true,
             )
 
-            // Track preview
             uiState.track?.let { track ->
                 TrackPreviewCard(
                     track = track,
@@ -120,9 +262,10 @@ fun HomeScreen(viewModel: MainViewModel) {
                     onStartChange = viewModel::setStartKm,
                     onEndChange = viewModel::setEndKm,
                     isRunning = isRunning,
+                    modifier = Modifier.weight(1f),
+                    isCompact = true,
                 )
 
-                // Track range (start / end)
                 TrackRangeCard(
                     startKm = uiState.startKm,
                     endKm = uiState.endKm,
@@ -130,49 +273,66 @@ fun HomeScreen(viewModel: MainViewModel) {
                     onStartChange = viewModel::setStartKm,
                     onEndChange = viewModel::setEndKm,
                     isRunning = isRunning,
-                )
-
-                // Travel mode
-                TravelModeCard(
-                    travelMode = uiState.travelMode,
-                    onModeChange = viewModel::setTravelMode,
-                    isRunning = isRunning,
+                    isCompact = true,
                 )
             }
+        }
 
-            // Speed control
-            SpeedControlCard(
-                speedKmh = uiState.speedKmh,
-                onSpeedChange = viewModel::setSpeed,
-            )
-
-            // Update rate control
-            UpdateRateCard(
-                intervalMs = uiState.updateIntervalMs,
-                onIntervalChange = viewModel::setUpdateInterval,
-            )
-
-            // Progress
-            if (isRunning) {
-                ProgressCard(
-                    progress = progress,
-                    currentPoint = currentPoint,
-                    distanceTraveledMeters = distanceTraveled,
+        // ===== RIGHT PANE: Controls =====
+        Column(
+            modifier = Modifier
+                .weight(0.45f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            // Scrollable area for controls
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SpeedControlCard(
+                    speedKmh = uiState.speedKmh,
+                    onSpeedChange = viewModel::setSpeed,
                 )
+
+                uiState.track?.let {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        TravelModeCard(
+                            travelMode = uiState.travelMode,
+                            onModeChange = viewModel::setTravelMode,
+                            isRunning = isRunning,
+                            modifier = Modifier.weight(1f),
+                            isCompact = true,
+                        )
+                        UpdateRateCard(
+                            intervalMs = uiState.updateIntervalMs,
+                            onIntervalChange = viewModel::setUpdateInterval,
+                            modifier = Modifier.weight(1f),
+                            isCompact = true,
+                        )
+                    }
+                }
+
+                if (isRunning) {
+                    ProgressCard(
+                        progress = progress,
+                        currentPoint = currentPoint,
+                        distanceTraveledMeters = distanceTraveled,
+                    )
+                }
             }
 
-            // Start/Stop button
+            // Start/Stop button pinned at bottom
             MockControlButton(
                 isRunning = isRunning,
                 hasTrack = uiState.track != null,
-                onStart = {
-                    if (isMockLocationEnabled(context)) {
-                        viewModel.startMocking()
-                    } else {
-                        showMockLocationDialog = true
-                    }
-                },
-                onStop = viewModel::stopMocking,
+                onStart = onStart,
+                onStop = onStop,
             )
         }
     }
@@ -184,45 +344,97 @@ private fun FileSelectionCard(
     track: GpxTrack?,
     isRunning: Boolean,
     onPickFile: () -> Unit,
+    isCompact: Boolean = false,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "GPX Track",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (fileName != null && track != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+    if (isCompact) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            tonalElevation = 1.dp,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (fileName != null && track != null) {
                     Icon(
                         Icons.Default.Route,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(text = fileName, style = MaterialTheme.typography.bodyLarge)
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "${track.points.size} points · " +
-                                    "%.2f km".format(track.totalDistanceMeters / 1000),
+                            text = fileName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${track.points.size} pts · ${"%.1f".format(track.totalDistanceMeters / 1000)} km",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onPickFile,
+                    enabled = !isRunning,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        if (fileName == null) "Select GPX" else "Change",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
             }
+        }
+    } else {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "GPX Track",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
-                onClick = onPickFile,
-                enabled = !isRunning,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.FileOpen, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(if (fileName == null) "Select GPX file" else "Change file")
+                if (fileName != null && track != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Route,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(text = fileName, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                text = "${track.points.size} points · " +
+                                        "%.2f km".format(track.totalDistanceMeters / 1000),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                OutlinedButton(
+                    onClick = onPickFile,
+                    enabled = !isRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.FileOpen, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (fileName == null) "Select GPX file" else "Change file")
+                }
             }
         }
     }
@@ -237,6 +449,8 @@ private fun TrackPreviewCard(
     onStartChange: (Float) -> Unit,
     onEndChange: (Float) -> Unit,
     isRunning: Boolean,
+    modifier: Modifier = Modifier,
+    isCompact: Boolean = false,
 ) {
     val points = track.points
 
@@ -281,21 +495,24 @@ private fun TrackPreviewCard(
     val currentEndKm by rememberUpdatedState(endKm)
     val currentIsRunning by rememberUpdatedState(isRunning)
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = track.name ?: "Track Preview",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+    val cardPadding = if (isCompact) 8.dp else 16.dp
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(cardPadding)) {
+            if (!isCompact) {
+                Text(
+                    text = track.name ?: "Track Preview",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             val trackColor = MaterialTheme.colorScheme.primary
 
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .then(if (isCompact) Modifier.fillMaxHeight() else Modifier.height(200.dp))
                     .pointerInput(track) {
                         val paddingPx = 16.dp.toPx()
                         val w = size.width - 2 * paddingPx
@@ -616,13 +833,13 @@ private fun TrackRangeCard(
     onStartChange: (Float) -> Unit,
     onEndChange: (Float) -> Unit,
     isRunning: Boolean,
+    isCompact: Boolean = false,
 ) {
     var startText by remember { mutableStateOf(if (startKm == 0f) "" else "%.2f".format(startKm)) }
     var endText by remember { mutableStateOf("%.2f".format(endKm)) }
     var startFocused by remember { mutableStateOf(false) }
     var endFocused by remember { mutableStateOf(false) }
 
-    // Sync from model only when the field is NOT focused (e.g. drag updates)
     LaunchedEffect(startKm) {
         if (!startFocused) startText = if (startKm == 0f) "" else "%.2f".format(startKm)
     }
@@ -630,24 +847,29 @@ private fun TrackRangeCard(
         if (!endFocused) endText = "%.2f".format(endKm)
     }
 
+    val cardPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 4.dp) else PaddingValues(16.dp)
+
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Track Range",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Track total: %.2f km".format(totalDistanceKm),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+        Column(modifier = Modifier.padding(cardPadding)) {
+            if (!isCompact) {
+                Text(
+                    text = "Track Range",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Track total: %.2f km".format(totalDistanceKm),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedTextField(
                     value = startText,
@@ -657,7 +879,7 @@ private fun TrackRangeCard(
                         if (parsed != null) onStartChange(parsed)
                         else if (input.isEmpty()) onStartChange(0f)
                     },
-                    label = { Text("Start (km)") },
+                    label = { Text("Start km") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     enabled = !isRunning,
@@ -678,7 +900,7 @@ private fun TrackRangeCard(
                         if (parsed != null) onEndChange(parsed)
                         else if (input.isEmpty()) onEndChange(totalDistanceKm.toFloat())
                     },
-                    label = { Text("End (km)") },
+                    label = { Text("End km") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     enabled = !isRunning,
@@ -702,15 +924,18 @@ private fun TravelModeCard(
     travelMode: TravelMode,
     onModeChange: (TravelMode) -> Unit,
     isRunning: Boolean,
+    modifier: Modifier = Modifier,
+    isCompact: Boolean = false,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    val cardPadding = if (isCompact) 8.dp else 16.dp
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(cardPadding)) {
             Text(
-                text = "Travel Mode",
-                style = MaterialTheme.typography.titleMedium,
+                text = if (isCompact) "Mode" else "Travel Mode",
+                style = if (isCompact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(if (isCompact) 4.dp else 8.dp))
 
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 TravelMode.entries.forEachIndexed { index, mode ->
@@ -723,17 +948,19 @@ private fun TravelModeCard(
                             count = TravelMode.entries.size,
                         ),
                     ) {
-                        Text(mode.label)
+                        Text(mode.label, style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelLarge, maxLines = 1)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = travelMode.description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (!isCompact) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = travelMode.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -820,21 +1047,26 @@ private val intervalOptions = listOf(
 private fun UpdateRateCard(
     intervalMs: Long,
     onIntervalChange: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+    isCompact: Boolean = false,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    val cardPadding = if (isCompact) 8.dp else 16.dp
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(cardPadding)) {
             Text(
-                text = "Update Rate",
-                style = MaterialTheme.typography.titleMedium,
+                text = if (isCompact) "Rate" else "Update Rate",
+                style = if (isCompact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Faster rates give smoother movement",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+            if (!isCompact) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Faster rates give smoother movement",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.height(if (isCompact) 4.dp else 8.dp))
 
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 intervalOptions.forEachIndexed { index, option ->
@@ -846,7 +1078,10 @@ private fun UpdateRateCard(
                             count = intervalOptions.size,
                         ),
                     ) {
-                        Text(option.label)
+                        Text(
+                            if (isCompact) option.label.replace("ms", "") else option.label,
+                            style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelLarge,
+                        )
                     }
                 }
             }
