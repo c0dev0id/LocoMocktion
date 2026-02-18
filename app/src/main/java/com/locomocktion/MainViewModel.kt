@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
 import com.locomocktion.gpx.parseGpx
+import com.locomocktion.gpx.simplifyTrack
 import com.locomocktion.service.MockLocationService
 import com.locomocktion.service.TravelMode
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +41,8 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 val stream = app.contentResolver.openInputStream(uri)
                     ?: throw IllegalArgumentException("Cannot open file")
-                val track = stream.use { parseGpx(it) }
+                val raw = stream.use { parseGpx(it) }
+                val track = raw.copy(points = simplifyTrack(raw.points))
                 if (track.points.isEmpty()) {
                     _uiState.update { it.copy(error = "GPX file contains no track points") }
                     return@launch

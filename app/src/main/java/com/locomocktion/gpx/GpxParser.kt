@@ -28,6 +28,52 @@ fun distanceBetween(a: TrackPoint, b: TrackPoint): Double {
 }
 
 /**
+ * Perpendicular distance from point [p] to the line segment [start]-[end], in meters.
+ */
+private fun perpendicularDistance(p: TrackPoint, start: TrackPoint, end: TrackPoint): Double {
+    if (start.latitude == end.latitude && start.longitude == end.longitude) {
+        return distanceBetween(p, start)
+    }
+    val totalDist = distanceBetween(start, end)
+    if (totalDist < 0.1) return distanceBetween(p, start)
+
+    // Project p onto the line using geographic distances
+    val dStartP = distanceBetween(start, p)
+    val dEndP = distanceBetween(end, p)
+
+    // Use Heron's formula to get the area, then derive height
+    val s = (totalDist + dStartP + dEndP) / 2.0
+    val area = sqrt((s * (s - totalDist) * (s - dStartP) * (s - dEndP)).coerceAtLeast(0.0))
+    return 2.0 * area / totalDist
+}
+
+/**
+ * Simplify a list of [TrackPoint]s using the Ramer-Douglas-Peucker algorithm.
+ * Points that deviate less than [toleranceMeters] from a straight line are removed.
+ */
+fun simplifyTrack(points: List<TrackPoint>, toleranceMeters: Double = 5.0): List<TrackPoint> {
+    if (points.size <= 2) return points
+
+    var maxDist = 0.0
+    var maxIndex = 0
+    for (i in 1 until points.lastIndex) {
+        val dist = perpendicularDistance(points[i], points.first(), points.last())
+        if (dist > maxDist) {
+            maxDist = dist
+            maxIndex = i
+        }
+    }
+
+    return if (maxDist > toleranceMeters) {
+        val left = simplifyTrack(points.subList(0, maxIndex + 1), toleranceMeters)
+        val right = simplifyTrack(points.subList(maxIndex, points.size), toleranceMeters)
+        left.dropLast(1) + right
+    } else {
+        listOf(points.first(), points.last())
+    }
+}
+
+/**
  * Parses a GPX file and extracts track points from all track segments.
  */
 fun parseGpx(input: InputStream): GpxTrack {

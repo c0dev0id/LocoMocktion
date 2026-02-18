@@ -1183,7 +1183,7 @@ private fun MockControlButton(
         modifier = Modifier
             .fillMaxWidth()
             .height(56.dp),
-        enabled = hasTrack,
+        enabled = isRunning || hasTrack,
         colors = if (isRunning) {
             ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.error,
