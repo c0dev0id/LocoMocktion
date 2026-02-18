@@ -55,6 +55,11 @@ fun HomeScreen(viewModel: MainViewModel) {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        } catch (_: Exception) {}
         val cursor = context.contentResolver.query(uri, null, null, null, null)
         val name = cursor?.use {
             if (it.moveToFirst()) {
@@ -169,30 +174,28 @@ private fun PortraitContent(
             onPickFile = onPickFile,
         )
 
-        uiState.track?.let { track ->
-            TrackPreviewCard(
-                track = track,
-                startKm = uiState.startKm,
-                endKm = uiState.endKm,
-                currentPoint = currentPoint,
-                onStartChange = viewModel::setStartKm,
-                onEndChange = viewModel::setEndKm,
-                isRunning = isRunning,
-            )
-            TrackRangeCard(
-                startKm = uiState.startKm,
-                endKm = uiState.endKm,
-                totalDistanceKm = track.totalDistanceMeters / 1000.0,
-                onStartChange = viewModel::setStartKm,
-                onEndChange = viewModel::setEndKm,
-                isRunning = isRunning,
-            )
-            TravelModeCard(
-                travelMode = uiState.travelMode,
-                onModeChange = viewModel::setTravelMode,
-                isRunning = isRunning,
-            )
-        }
+        TrackPreviewCard(
+            track = uiState.track,
+            startKm = uiState.startKm,
+            endKm = uiState.endKm,
+            currentPoint = currentPoint,
+            onStartChange = viewModel::setStartKm,
+            onEndChange = viewModel::setEndKm,
+            isRunning = isRunning,
+        )
+        TrackRangeCard(
+            startKm = uiState.startKm,
+            endKm = uiState.endKm,
+            totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
+            onStartChange = viewModel::setStartKm,
+            onEndChange = viewModel::setEndKm,
+            isRunning = isRunning || uiState.track == null,
+        )
+        TravelModeCard(
+            travelMode = uiState.travelMode,
+            onModeChange = viewModel::setTravelMode,
+            isRunning = isRunning || uiState.track == null,
+        )
 
         SpeedControlCard(
             speedKmh = uiState.speedKmh,
@@ -253,29 +256,27 @@ private fun LandscapeContent(
                 isCompact = true,
             )
 
-            uiState.track?.let { track ->
-                TrackPreviewCard(
-                    track = track,
-                    startKm = uiState.startKm,
-                    endKm = uiState.endKm,
-                    currentPoint = currentPoint,
-                    onStartChange = viewModel::setStartKm,
-                    onEndChange = viewModel::setEndKm,
-                    isRunning = isRunning,
-                    modifier = Modifier.weight(1f),
-                    isCompact = true,
-                )
+            TrackPreviewCard(
+                track = uiState.track,
+                startKm = uiState.startKm,
+                endKm = uiState.endKm,
+                currentPoint = currentPoint,
+                onStartChange = viewModel::setStartKm,
+                onEndChange = viewModel::setEndKm,
+                isRunning = isRunning,
+                modifier = Modifier.weight(1f),
+                isCompact = true,
+            )
 
-                TrackRangeCard(
-                    startKm = uiState.startKm,
-                    endKm = uiState.endKm,
-                    totalDistanceKm = track.totalDistanceMeters / 1000.0,
-                    onStartChange = viewModel::setStartKm,
-                    onEndChange = viewModel::setEndKm,
-                    isRunning = isRunning,
-                    isCompact = true,
-                )
-            }
+            TrackRangeCard(
+                startKm = uiState.startKm,
+                endKm = uiState.endKm,
+                totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
+                onStartChange = viewModel::setStartKm,
+                onEndChange = viewModel::setEndKm,
+                isRunning = isRunning || uiState.track == null,
+                isCompact = true,
+            )
         }
 
         // ===== RIGHT PANE: Controls =====
@@ -297,25 +298,23 @@ private fun LandscapeContent(
                     onSpeedChange = viewModel::setSpeed,
                 )
 
-                uiState.track?.let {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        TravelModeCard(
-                            travelMode = uiState.travelMode,
-                            onModeChange = viewModel::setTravelMode,
-                            isRunning = isRunning,
-                            modifier = Modifier.weight(1f),
-                            isCompact = true,
-                        )
-                        UpdateRateCard(
-                            intervalMs = uiState.updateIntervalMs,
-                            onIntervalChange = viewModel::setUpdateInterval,
-                            modifier = Modifier.weight(1f),
-                            isCompact = true,
-                        )
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    TravelModeCard(
+                        travelMode = uiState.travelMode,
+                        onModeChange = viewModel::setTravelMode,
+                        isRunning = isRunning || uiState.track == null,
+                        modifier = Modifier.weight(1f),
+                        isCompact = true,
+                    )
+                    UpdateRateCard(
+                        intervalMs = uiState.updateIntervalMs,
+                        onIntervalChange = viewModel::setUpdateInterval,
+                        modifier = Modifier.weight(1f),
+                        isCompact = true,
+                    )
                 }
 
                 if (isRunning) {
@@ -442,7 +441,7 @@ private fun FileSelectionCard(
 
 @Composable
 private fun TrackPreviewCard(
-    track: GpxTrack,
+    track: GpxTrack?,
     startKm: Float,
     endKm: Float,
     currentPoint: TrackPoint?,
@@ -452,6 +451,34 @@ private fun TrackPreviewCard(
     modifier: Modifier = Modifier,
     isCompact: Boolean = false,
 ) {
+    if (track == null || track.points.size < 2) {
+        Card(modifier = modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(if (isCompact) 8.dp else 16.dp)) {
+                if (!isCompact) {
+                    Text(
+                        text = "Track Preview",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (isCompact) Modifier.fillMaxHeight() else Modifier.height(200.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Load a GPX file to preview the track",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        return
+    }
+
     val points = track.points
 
     // Pre-compute cumulative distances along the track

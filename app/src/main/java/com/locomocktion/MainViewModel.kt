@@ -1,6 +1,7 @@
 package com.locomocktion
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -36,6 +37,16 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     val currentPoint: StateFlow<TrackPoint?> = MockLocationService.currentPoint
     val distanceTraveled: StateFlow<Double> = MockLocationService.distanceTraveled
 
+    private val prefs = app.getSharedPreferences("locomocktion", Context.MODE_PRIVATE)
+
+    init {
+        val lastUri = prefs.getString("last_gpx_uri", null)
+        val lastName = prefs.getString("last_gpx_name", null)
+        if (lastUri != null) {
+            loadGpx(Uri.parse(lastUri), lastName)
+        }
+    }
+
     fun loadGpx(uri: Uri, displayName: String?) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -47,15 +58,20 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                     _uiState.update { it.copy(error = "GPX file contains no track points") }
                     return@launch
                 }
+                val name = displayName ?: track.name ?: "Unknown"
                 _uiState.update {
                     it.copy(
                         track = track,
-                        fileName = displayName ?: track.name ?: "Unknown",
+                        fileName = name,
                         startKm = 0f,
                         endKm = (track.totalDistanceMeters / 1000).toFloat(),
                         error = null,
                     )
                 }
+                prefs.edit()
+                    .putString("last_gpx_uri", uri.toString())
+                    .putString("last_gpx_name", name)
+                    .apply()
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to parse GPX: ${e.message}") }
             }
