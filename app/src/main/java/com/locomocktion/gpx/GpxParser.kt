@@ -48,29 +48,72 @@ private fun perpendicularDistance(p: TrackPoint, start: TrackPoint, end: TrackPo
 }
 
 /**
- * Simplify a list of [TrackPoint]s using the Ramer-Douglas-Peucker algorithm.
- * Points that deviate less than [toleranceMeters] from a straight line are removed.
+ * Iterative Ramer-Douglas-Peucker simplification.
+ * Uses an explicit stack to avoid stack overflow on large tracks.
  */
-fun simplifyTrack(points: List<TrackPoint>, toleranceMeters: Double = 5.0): List<TrackPoint> {
+private fun rdpSimplify(points: List<TrackPoint>, toleranceMeters: Double): List<TrackPoint> {
     if (points.size <= 2) return points
 
-    var maxDist = 0.0
-    var maxIndex = 0
-    for (i in 1 until points.lastIndex) {
-        val dist = perpendicularDistance(points[i], points.first(), points.last())
-        if (dist > maxDist) {
-            maxDist = dist
-            maxIndex = i
+    val keep = BooleanArray(points.size)
+    keep[0] = true
+    keep[points.lastIndex] = true
+
+    val stack = ArrayDeque<Pair<Int, Int>>()
+    stack.addLast(0 to points.lastIndex)
+
+    while (stack.isNotEmpty()) {
+        val (start, end) = stack.removeLast()
+        if (end - start < 2) continue
+
+        var maxDist = 0.0
+        var maxIndex = start
+        for (i in start + 1 until end) {
+            val dist = perpendicularDistance(points[i], points[start], points[end])
+            if (dist > maxDist) {
+                maxDist = dist
+                maxIndex = i
+            }
+        }
+
+        if (maxDist > toleranceMeters) {
+            keep[maxIndex] = true
+            stack.addLast(start to maxIndex)
+            stack.addLast(maxIndex to end)
         }
     }
 
-    return if (maxDist > toleranceMeters) {
-        val left = simplifyTrack(points.subList(0, maxIndex + 1), toleranceMeters)
-        val right = simplifyTrack(points.subList(maxIndex, points.size), toleranceMeters)
-        left.dropLast(1) + right
-    } else {
-        listOf(points.first(), points.last())
+    return points.filterIndexed { index, _ -> keep[index] }
+}
+
+/**
+ * Simplify a list of [TrackPoint]s using the Ramer-Douglas-Peucker algorithm.
+ * Points that deviate less than [toleranceMeters] from a straight line are removed.
+ * If the result still exceeds [maxPoints], the tolerance is progressively doubled
+ * until the point count is within budget (with a uniform-subsample fallback).
+ */
+fun simplifyTrack(
+    points: List<TrackPoint>,
+    toleranceMeters: Double = 10.0,
+    maxPoints: Int = 2000,
+): List<TrackPoint> {
+    if (points.size <= 2) return points
+
+    var result = rdpSimplify(points, toleranceMeters)
+
+    // Progressively increase tolerance until under the cap
+    var tol = toleranceMeters * 2
+    while (result.size > maxPoints && tol < 10_000.0) {
+        result = rdpSimplify(result, tol)
+        tol *= 2
     }
+
+    // Final fallback: uniform subsample keeping first and last
+    if (result.size > maxPoints) {
+        val step = (result.size - 1).toDouble() / (maxPoints - 1)
+        result = (0 until maxPoints).map { result[(it * step).toInt() .coerceAtMost(result.lastIndex)] }
+    }
+
+    return result
 }
 
 /**
