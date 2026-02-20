@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
+import com.locomocktion.gpx.distanceBetween
 import com.locomocktion.gpx.parseGpx
 import com.locomocktion.gpx.simplifyTrack
 import com.locomocktion.service.MockLocationService
@@ -18,6 +19,8 @@ import kotlinx.coroutines.launch
 
 data class UiState(
     val track: GpxTrack? = null,
+    val rawPoints: List<TrackPoint>? = null,
+    val rawTotalDistanceMeters: Double = 0.0,
     val fileName: String? = null,
     val speedKmh: Float = 20f,
     val updateIntervalMs: Long = 1000L,
@@ -25,6 +28,10 @@ data class UiState(
     val endKm: Float = 0f,
     val travelMode: TravelMode = TravelMode.Normal,
     val error: String? = null,
+    val isLoading: Boolean = false,
+    val availableTracks: List<GpxTrack>? = null,
+    val pendingUri: String? = null,
+    val pendingDisplayName: String? = null,
 )
 
 class MainViewModel(private val app: Application) : AndroidViewModel(app) {
@@ -49,32 +56,80 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun loadGpx(uri: Uri, displayName: String?) {
         viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isLoading = true, error = null) }
             try {
                 val stream = app.contentResolver.openInputStream(uri)
                     ?: throw IllegalArgumentException("Cannot open file")
-                val raw = stream.use { parseGpx(it) }
-                val track = raw.copy(points = simplifyTrack(raw.points))
-                if (track.points.isEmpty()) {
-                    _uiState.update { it.copy(error = "GPX file contains no track points") }
+                val allTracks = stream.use { parseGpx(it) }
+                    .filter { it.points.isNotEmpty() }
+
+                if (allTracks.isEmpty()) {
+                    _uiState.update { it.copy(isLoading = false, error = "GPX file contains no tracks") }
                     return@launch
                 }
-                val name = displayName ?: track.name ?: "Unknown"
-                _uiState.update {
-                    it.copy(
-                        track = track,
-                        fileName = name,
-                        startKm = 0f,
-                        endKm = (track.totalDistanceMeters / 1000).toFloat(),
-                        error = null,
-                    )
+
+                if (allTracks.size == 1) {
+                    applyTrack(allTracks[0], uri, displayName)
+                } else {
+                    // Multiple tracks – let the user choose
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            availableTracks = allTracks,
+                            pendingUri = uri.toString(),
+                            pendingDisplayName = displayName,
+                        )
+                    }
                 }
-                prefs.edit()
-                    .putString("last_gpx_uri", uri.toString())
-                    .putString("last_gpx_name", name)
-                    .apply()
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Failed to parse GPX: ${e.message}") }
+                _uiState.update { it.copy(isLoading = false, error = "Failed to parse GPX: ${e.message}") }
             }
+        }
+    }
+
+    fun selectTrack(index: Int) {
+        val state = _uiState.value
+        val tracks = state.availableTracks ?: return
+        val track = tracks.getOrNull(index) ?: return
+        val uri = state.pendingUri?.let { Uri.parse(it) }
+        val name = state.pendingDisplayName
+        _uiState.update {
+            it.copy(availableTracks = null, pendingUri = null, pendingDisplayName = null, isLoading = true)
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            applyTrack(track, uri, name)
+        }
+    }
+
+    fun dismissTrackSelection() {
+        _uiState.update { it.copy(availableTracks = null, pendingUri = null, pendingDisplayName = null) }
+    }
+
+    private fun applyTrack(raw: GpxTrack, uri: Uri?, displayName: String?) {
+        val simplified = raw.copy(points = simplifyTrack(raw.points))
+        if (simplified.points.isEmpty()) {
+            _uiState.update { it.copy(isLoading = false, error = "Track contains no points") }
+            return
+        }
+        val rawTotal = raw.points.zipWithNext { a, b -> distanceBetween(a, b) }.sum()
+        val name = displayName ?: raw.name ?: "Unknown"
+        _uiState.update {
+            it.copy(
+                track = simplified,
+                rawPoints = raw.points,
+                rawTotalDistanceMeters = rawTotal,
+                fileName = name,
+                startKm = 0f,
+                endKm = (simplified.totalDistanceMeters / 1000).toFloat(),
+                error = null,
+                isLoading = false,
+            )
+        }
+        if (uri != null) {
+            prefs.edit()
+                .putString("last_gpx_uri", uri.toString())
+                .putString("last_gpx_name", name)
+                .apply()
         }
     }
 
@@ -107,12 +162,17 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     fun startMocking() {
         val state = _uiState.value
         val track = state.track ?: return
+        val points = state.rawPoints ?: track.points
+        // Scale km offsets from simplified track distance to raw track distance
+        val simplifiedTotal = track.totalDistanceMeters
+        val rawTotal = state.rawTotalDistanceMeters
+        val ratio = if (simplifiedTotal > 0) rawTotal / simplifiedTotal else 1.0
         MockLocationService.configure(
-            points = track.points,
+            points = points,
             speed = state.speedKmh / 3.6f,
             intervalMs = state.updateIntervalMs,
-            offsetMeters = (state.startKm * 1000).toDouble(),
-            endOffsetMeters = (state.endKm * 1000).toDouble(),
+            offsetMeters = (state.startKm * 1000).toDouble() * ratio,
+            endOffsetMeters = (state.endKm * 1000).toDouble() * ratio,
             travelMode = state.travelMode,
         )
 

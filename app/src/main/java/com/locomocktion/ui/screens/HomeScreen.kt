@@ -7,6 +7,8 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
@@ -20,6 +22,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -27,8 +30,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -88,6 +93,14 @@ fun HomeScreen(viewModel: MainViewModel) {
                 showMockLocationDialog = false
                 context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
             },
+        )
+    }
+
+    uiState.availableTracks?.let { tracks ->
+        TrackSelectionDialog(
+            tracks = tracks,
+            onSelect = viewModel::selectTrack,
+            onDismiss = viewModel::dismissTrackSelection,
         )
     }
 
@@ -182,6 +195,7 @@ private fun PortraitContent(
             onStartChange = viewModel::setStartKm,
             onEndChange = viewModel::setEndKm,
             isRunning = isRunning,
+            isLoading = uiState.isLoading,
         )
         TrackRangeCard(
             startKm = uiState.startKm,
@@ -264,6 +278,7 @@ private fun LandscapeContent(
                 onStartChange = viewModel::setStartKm,
                 onEndChange = viewModel::setEndKm,
                 isRunning = isRunning,
+                isLoading = uiState.isLoading,
                 modifier = Modifier.weight(1f),
                 isCompact = true,
             )
@@ -448,10 +463,11 @@ private fun TrackPreviewCard(
     onStartChange: (Float) -> Unit,
     onEndChange: (Float) -> Unit,
     isRunning: Boolean,
+    isLoading: Boolean = false,
     modifier: Modifier = Modifier,
     isCompact: Boolean = false,
 ) {
-    if (track == null || track.points.size < 2) {
+    if ((track == null || track.points.size < 2) && !isLoading) {
         Card(modifier = modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(if (isCompact) 8.dp else 16.dp)) {
                 if (!isCompact) {
@@ -479,7 +495,41 @@ private fun TrackPreviewCard(
         return
     }
 
-    val points = track.points
+    // Show loading placeholder while track is being parsed
+    if (isLoading && (track == null || track.points.size < 2)) {
+        Card(modifier = modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(if (isCompact) 8.dp else 16.dp)) {
+                if (!isCompact) {
+                    Text(
+                        text = "Track Preview",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (isCompact) Modifier.fillMaxHeight() else Modifier.height(200.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Loading track\u2026",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // From here on, track is guaranteed non-null with >= 2 points
+    val points = track!!.points
 
     // Pre-compute cumulative distances along the track
     val cumulativeDistances = remember(track) {
@@ -522,359 +572,531 @@ private fun TrackPreviewCard(
     val currentEndKm by rememberUpdatedState(endKm)
     val currentIsRunning by rememberUpdatedState(isRunning)
 
+    // --- Zoom state ---
+    var zoomScale by remember { mutableFloatStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var zoomedToSelection by remember { mutableStateOf(false) }
+    val currentZoomScale by rememberUpdatedState(zoomScale)
+    val currentPanOffset by rememberUpdatedState(panOffset)
+
+    // Reset zoom when track changes
+    LaunchedEffect(track) {
+        zoomScale = 1f
+        panOffset = Offset.Zero
+        zoomedToSelection = false
+    }
+
+    // Container size in px so we can compute selection zoom
+    var containerWidthPx by remember { mutableFloatStateOf(0f) }
+    var containerHeightPx by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+
+    fun zoomToSelection() {
+        if (containerWidthPx <= 0f || containerHeightPx <= 0f) return
+        val paddingPx = with(density) { 16.dp.toPx() }
+        val w = containerWidthPx - 2 * paddingPx
+        val h = containerHeightPx - 2 * paddingPx
+
+        val startMeters = (startKm * 1000).toDouble()
+        val endMeters = (endKm * 1000).toDouble()
+        val lowM = minOf(startMeters, endMeters)
+        val highM = maxOf(startMeters, endMeters)
+
+        // Gather points within the selection
+        var selMinLat = Double.MAX_VALUE; var selMaxLat = -Double.MAX_VALUE
+        var selMinLon = Double.MAX_VALUE; var selMaxLon = -Double.MAX_VALUE
+        for (i in points.indices) {
+            val d = cumulativeDistances[i]
+            if (d in lowM..highM) {
+                selMinLat = minOf(selMinLat, points[i].latitude)
+                selMaxLat = maxOf(selMaxLat, points[i].latitude)
+                selMinLon = minOf(selMinLon, points[i].longitude)
+                selMaxLon = maxOf(selMaxLon, points[i].longitude)
+            }
+        }
+        // Include interpolated start/end
+        val pStart = positionAtMeters(lowM)
+        val pEnd = positionAtMeters(highM)
+        selMinLat = minOf(selMinLat, pStart.latitude, pEnd.latitude)
+        selMaxLat = maxOf(selMaxLat, pStart.latitude, pEnd.latitude)
+        selMinLon = minOf(selMinLon, pStart.longitude, pEnd.longitude)
+        selMaxLon = maxOf(selMaxLon, pStart.longitude, pEnd.longitude)
+
+        val selLatRange = (selMaxLat - selMinLat).coerceAtLeast(0.00001)
+        val selLonRange = (selMaxLon - selMinLon).coerceAtLeast(0.00001)
+
+        // How much of the full view does the selection occupy?
+        val fracW = (selLonRange / lonRange).toFloat()
+        val fracH = (selLatRange / latRange).toFloat()
+        val newScale = (0.8f / maxOf(fracW, fracH)).coerceIn(1f, 20f)
+
+        // Centre of the selection in normalised [0..1] coordinates
+        val cx = ((selMinLon + selLonRange / 2 - minLon) / lonRange).toFloat()
+        val cy = (1f - ((selMinLat + selLatRange / 2 - minLat) / latRange).toFloat())
+
+        // Pan so that the centre of the selection is in the centre of the view
+        val panX = -(cx * w * newScale - w / 2 + paddingPx * (newScale - 1f))
+        val panY = -(cy * h * newScale - h / 2 + paddingPx * (newScale - 1f))
+
+        zoomScale = newScale
+        panOffset = Offset(panX, panY)
+    }
+
+    fun resetZoom() {
+        zoomScale = 1f
+        panOffset = Offset.Zero
+    }
+
     val cardPadding = if (isCompact) 8.dp else 16.dp
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(cardPadding)) {
-            if (!isCompact) {
-                Text(
-                    text = track.name ?: "Track Preview",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
+            // Title row with zoom toggle button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!isCompact) {
+                    Text(
+                        text = track.name ?: "Track Preview",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+                IconButton(
+                    onClick = {
+                        if (zoomedToSelection) {
+                            resetZoom()
+                            zoomedToSelection = false
+                        } else {
+                            zoomToSelection()
+                            zoomedToSelection = true
+                        }
+                    },
+                    modifier = Modifier.size(if (isCompact) 28.dp else 36.dp),
+                ) {
+                    Icon(
+                        imageVector = if (zoomedToSelection) Icons.Default.ZoomOutMap else Icons.Default.ZoomInMap,
+                        contentDescription = if (zoomedToSelection) "View all" else "Zoom to selection",
+                        modifier = Modifier.size(if (isCompact) 16.dp else 20.dp),
+                    )
+                }
             }
+            if (!isCompact) Spacer(modifier = Modifier.height(4.dp))
 
             val trackColor = MaterialTheme.colorScheme.primary
 
-            Canvas(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(if (isCompact) Modifier.fillMaxHeight() else Modifier.height(200.dp))
-                    .pointerInput(track) {
-                        val paddingPx = 16.dp.toPx()
-                        val w = size.width - 2 * paddingPx
-                        val h = size.height - 2 * paddingPx
-                        val hitRadiusPx = 32.dp.toPx()
-
-                        fun toScreen(p: TrackPoint): Offset {
-                            val x = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
-                            val y = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
-                            return Offset(x, y)
-                        }
-
-                        val screenPositions = points.map { toScreen(it) }
-
-                        fun nearestMetersOnTrack(touchPos: Offset): Double {
-                            var bestDistSq = Float.MAX_VALUE
-                            var bestMeters = 0.0
-                            for (i in 0 until screenPositions.size - 1) {
-                                val a = screenPositions[i]
-                                val b = screenPositions[i + 1]
-                                val abx = b.x - a.x
-                                val aby = b.y - a.y
-                                val abLenSq = abx * abx + aby * aby
-                                val t = if (abLenSq < 0.001f) 0f
-                                else (((touchPos.x - a.x) * abx + (touchPos.y - a.y) * aby) / abLenSq)
-                                    .coerceIn(0f, 1f)
-                                val px = a.x + abx * t
-                                val py = a.y + aby * t
-                                val dx = touchPos.x - px
-                                val dy = touchPos.y - py
-                                val distSq = dx * dx + dy * dy
-                                if (distSq < bestDistSq) {
-                                    bestDistSq = distSq
-                                    bestMeters = cumulativeDistances[i] +
-                                            (cumulativeDistances[i + 1] - cumulativeDistances[i]) * t.toDouble()
-                                }
-                            }
-                            return bestMeters
-                        }
-
-                        awaitEachGesture {
-                            val down = awaitFirstDown()
-                            if (currentIsRunning) return@awaitEachGesture
-
-                            val startPos = toScreen(positionAtMeters((currentStartKm * 1000).toDouble()))
-                            val endPos = toScreen(positionAtMeters((currentEndKm * 1000).toDouble()))
-
-                            val diffStart = down.position - startPos
-                            val dStart = kotlin.math.sqrt(diffStart.x * diffStart.x + diffStart.y * diffStart.y)
-                            val diffEnd = down.position - endPos
-                            val dEnd = kotlin.math.sqrt(diffEnd.x * diffEnd.x + diffEnd.y * diffEnd.y)
-
-                            val target = when {
-                                dStart <= hitRadiusPx && dStart <= dEnd -> "start"
-                                dEnd <= hitRadiusPx -> "end"
-                                else -> null
-                            }
-
-                            if (target == null) return@awaitEachGesture
-
-                            // Consume the down event to prevent scroll from intercepting
-                            down.consume()
-
-                            do {
-                                val event = awaitPointerEvent()
-                                event.changes.forEach { change ->
-                                    if (change.pressed) {
-                                        change.consume()
-                                        val km = (nearestMetersOnTrack(change.position) / 1000).toFloat()
-                                        when (target) {
-                                            "start" -> onStartChange(km)
-                                            "end" -> onEndChange(km)
-                                        }
-                                    }
-                                }
-                            } while (event.changes.any { it.pressed })
-                        }
+                    .clipToBounds()
+                    .onSizeChanged { size ->
+                        containerWidthPx = size.width.toFloat()
+                        containerHeightPx = size.height.toFloat()
                     },
             ) {
-                if (points.size < 2) return@Canvas
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(track) {
+                            val paddingPx = 16.dp.toPx()
+                            val canvasW = size.width.toFloat()
+                            val canvasH = size.height.toFloat()
+                            val drawW = canvasW - 2 * paddingPx
+                            val drawH = canvasH - 2 * paddingPx
+                            val hitRadiusPx = 32.dp.toPx()
 
-                val paddingPx = 16.dp.toPx()
-                val w = size.width - 2 * paddingPx
-                val h = size.height - 2 * paddingPx
+                            fun toScreen(p: TrackPoint): Offset {
+                                val rawX = ((p.longitude - minLon) / lonRange * drawW + paddingPx).toFloat()
+                                val rawY = ((1 - (p.latitude - minLat) / latRange) * drawH + paddingPx).toFloat()
+                                return Offset(
+                                    rawX * currentZoomScale + currentPanOffset.x,
+                                    rawY * currentZoomScale + currentPanOffset.y,
+                                )
+                            }
 
-                fun toOffset(p: TrackPoint): Offset {
-                    val x = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
-                    val y = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
-                    return Offset(x, y)
-                }
+                            fun nearestMetersOnTrack(touchPos: Offset): Double {
+                                var bestDistSq = Float.MAX_VALUE
+                                var bestMeters = 0.0
+                                for (i in 0 until points.size - 1) {
+                                    val a = toScreen(points[i])
+                                    val b = toScreen(points[i + 1])
+                                    val abx = b.x - a.x
+                                    val aby = b.y - a.y
+                                    val abLenSq = abx * abx + aby * aby
+                                    val t = if (abLenSq < 0.001f) 0f
+                                    else (((touchPos.x - a.x) * abx + (touchPos.y - a.y) * aby) / abLenSq)
+                                        .coerceIn(0f, 1f)
+                                    val px = a.x + abx * t
+                                    val py = a.y + aby * t
+                                    val dx = touchPos.x - px
+                                    val dy = touchPos.y - py
+                                    val distSq = dx * dx + dy * dy
+                                    if (distSq < bestDistSq) {
+                                        bestDistSq = distSq
+                                        bestMeters = cumulativeDistances[i] +
+                                                (cumulativeDistances[i + 1] - cumulativeDistances[i]) * t.toDouble()
+                                    }
+                                }
+                                return bestMeters
+                            }
 
-                // Draw track line: active range in full color, inactive in faded
-                val startMeters = (startKm * 1000).toDouble()
-                val endMeters = (endKm * 1000).toDouble()
-                val lowMeters = minOf(startMeters, endMeters)
-                val highMeters = maxOf(startMeters, endMeters)
-                val rangeMeters = highMeters - lowMeters
-                val isReversed = startMeters > endMeters
-                val inactiveColor = trackColor.copy(alpha = 0.2f)
-                val activeStrokeWidth = 4.dp.toPx()
-                val inactiveStrokeWidth = 2.dp.toPx()
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
+                                if (currentIsRunning) return@awaitEachGesture
 
-                for (i in 0 until points.size - 1) {
-                    val segStart = cumulativeDistances[i]
-                    val segEnd = cumulativeDistances[i + 1]
-                    val isActive = segEnd >= lowMeters && segStart <= highMeters
-                    drawLine(
-                        color = if (isActive) trackColor else inactiveColor,
-                        start = toOffset(points[i]),
-                        end = toOffset(points[i + 1]),
-                        strokeWidth = if (isActive) activeStrokeWidth else inactiveStrokeWidth,
-                        cap = StrokeCap.Round,
-                    )
-                }
+                                val startPos = toScreen(positionAtMeters((currentStartKm * 1000).toDouble()))
+                                val endPos = toScreen(positionAtMeters((currentEndKm * 1000).toDouble()))
 
-                // --- Track endpoint bars (perpendicular to track direction) ---
-                val endpointBarLen = 8.dp.toPx()
-                val endpointStroke = 3.dp.toPx()
-                val endpointColor = trackColor.copy(alpha = 0.5f)
+                                val diffStart = down.position - startPos
+                                val dStart = kotlin.math.sqrt(diffStart.x * diffStart.x + diffStart.y * diffStart.y)
+                                val diffEnd = down.position - endPos
+                                val dEnd = kotlin.math.sqrt(diffEnd.x * diffEnd.x + diffEnd.y * diffEnd.y)
 
-                if (points.size >= 2) {
-                    val p0 = toOffset(points[0])
-                    val p1 = toOffset(points[1])
-                    val dx0 = p1.x - p0.x
-                    val dy0 = p1.y - p0.y
-                    val len0 = kotlin.math.sqrt(dx0 * dx0 + dy0 * dy0)
-                    if (len0 > 0.1f) {
-                        val perpX = -dy0 / len0 * endpointBarLen
-                        val perpY = dx0 / len0 * endpointBarLen
-                        drawLine(endpointColor, Offset(p0.x + perpX, p0.y + perpY), Offset(p0.x - perpX, p0.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
-                    }
+                                val target = when {
+                                    dStart <= hitRadiusPx && dStart <= dEnd -> "start"
+                                    dEnd <= hitRadiusPx -> "end"
+                                    else -> null
+                                }
 
-                    val pN = toOffset(points.last())
-                    val pPrev = toOffset(points[points.size - 2])
-                    val dxN = pN.x - pPrev.x
-                    val dyN = pN.y - pPrev.y
-                    val lenN = kotlin.math.sqrt(dxN * dxN + dyN * dyN)
-                    if (lenN > 0.1f) {
-                        val perpX = -dyN / lenN * endpointBarLen
-                        val perpY = dxN / lenN * endpointBarLen
-                        drawLine(endpointColor, Offset(pN.x + perpX, pN.y + perpY), Offset(pN.x - perpX, pN.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
-                    }
-                }
+                                if (target != null) {
+                                    // Marker drag
+                                    down.consume()
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        event.changes.forEach { change ->
+                                            if (change.pressed) {
+                                                change.consume()
+                                                val km = (nearestMetersOnTrack(change.position) / 1000).toFloat()
+                                                when (target) {
+                                                    "start" -> onStartChange(km)
+                                                    "end" -> onEndChange(km)
+                                                }
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                } else {
+                                    // Pinch-to-zoom / two-finger pan
+                                    down.consume()
+                                    var prevCentroid = down.position
+                                    var prevSpread = 0f
+                                    var pinching = false
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val pressed = event.changes.filter { it.pressed }
+                                        if (pressed.isEmpty()) break
+                                        event.changes.forEach { it.consume() }
 
-                // --- Direction arrows along active segment ---
-                if (rangeMeters > 1.0) {
-                    val arrowLen = 8.dp.toPx()
-                    val arrowHalfW = 5.dp.toPx()
-                    val lookAhead = (rangeMeters * 0.01).coerceAtLeast(50.0)
-                    val arrowFractions = listOf(0.25f, 0.5f, 0.75f)
-                    for (frac in arrowFractions) {
-                        val m = lowMeters + rangeMeters * frac
-                        // Look in the travel direction: forward along track, or backward if reversed
-                        val mAhead = if (isReversed) (m - lookAhead).coerceAtLeast(lowMeters)
-                                     else (m + lookAhead).coerceAtMost(highMeters)
-                        if (kotlin.math.abs(mAhead - m) < 1.0) continue
-                        val pt = toOffset(positionAtMeters(m))
-                        val ptAhead = toOffset(positionAtMeters(mAhead))
-                        val dx = ptAhead.x - pt.x
-                        val dy = ptAhead.y - pt.y
-                        val len = kotlin.math.sqrt(dx * dx + dy * dy)
-                        if (len < 0.1f) continue
-                        val ux = dx / len
-                        val uy = dy / len
-                        val px = -uy
-                        val py = ux
-                        val tipX = pt.x + ux * arrowLen
-                        val tipY = pt.y + uy * arrowLen
-                        val baseLeftX = pt.x - ux * arrowLen * 0.3f + px * arrowHalfW
-                        val baseLeftY = pt.y - uy * arrowLen * 0.3f + py * arrowHalfW
-                        val baseRightX = pt.x - ux * arrowLen * 0.3f - px * arrowHalfW
-                        val baseRightY = pt.y - uy * arrowLen * 0.3f - py * arrowHalfW
-                        val arrowPath = androidx.compose.ui.graphics.Path().apply {
-                            moveTo(tipX, tipY)
-                            lineTo(baseLeftX, baseLeftY)
-                            lineTo(baseRightX, baseRightY)
-                            close()
-                        }
-                        drawPath(arrowPath, color = Color.White)
-                        drawPath(
-                            arrowPath,
-                            color = trackColor,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f.dp.toPx()),
+                                        val centroid = Offset(
+                                            pressed.map { it.position.x }.average().toFloat(),
+                                            pressed.map { it.position.y }.average().toFloat(),
+                                        )
+                                        if (pressed.size >= 2) {
+                                            val spread = pressed.maxOf {
+                                                val dx = it.position.x - centroid.x
+                                                val dy = it.position.y - centroid.y
+                                                kotlin.math.sqrt(dx * dx + dy * dy)
+                                            }
+                                            if (pinching && prevSpread > 1f) {
+                                                val scaleFactor = spread / prevSpread
+                                                val newScale = (zoomScale * scaleFactor).coerceIn(1f, 20f)
+                                                // Zoom around centroid
+                                                val focalX = centroid.x
+                                                val focalY = centroid.y
+                                                panOffset = Offset(
+                                                    focalX - (focalX - panOffset.x) * (newScale / zoomScale),
+                                                    focalY - (focalY - panOffset.y) * (newScale / zoomScale),
+                                                )
+                                                zoomScale = newScale
+                                            }
+                                            prevSpread = spread
+                                            pinching = true
+                                        }
+                                        // Pan (works for single and multi-finger)
+                                        val delta = centroid - prevCentroid
+                                        if (zoomScale > 1f) {
+                                            panOffset += delta
+                                        }
+                                        prevCentroid = centroid
+                                        zoomedToSelection = false
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }
+                        },
+                ) {
+                    if (points.size < 2) return@Canvas
+
+                    val paddingPx = 16.dp.toPx()
+                    val w = size.width - 2 * paddingPx
+                    val h = size.height - 2 * paddingPx
+
+                    fun toOffset(p: TrackPoint): Offset {
+                        val rawX = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
+                        val rawY = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
+                        return Offset(
+                            rawX * zoomScale + panOffset.x,
+                            rawY * zoomScale + panOffset.y,
                         )
                     }
 
-                    // Distance label at midpoint of active range
-                    val midPt = toOffset(positionAtMeters(lowMeters + rangeMeters * 0.5))
-                    val distLabel = "%.1f km".format(rangeMeters / 1000.0)
-                    val distPaint = android.graphics.Paint().apply {
-                        color = 0xFF333333.toInt()
-                        textSize = 9.sp.toPx()
+                    // Draw track line: active range in full color, inactive in faded
+                    val startMeters = (startKm * 1000).toDouble()
+                    val endMeters = (endKm * 1000).toDouble()
+                    val lowMeters = minOf(startMeters, endMeters)
+                    val highMeters = maxOf(startMeters, endMeters)
+                    val rangeMeters = highMeters - lowMeters
+                    val isReversed = startMeters > endMeters
+                    val inactiveColor = trackColor.copy(alpha = 0.2f)
+                    val activeStrokeWidth = 4.dp.toPx()
+                    val inactiveStrokeWidth = 2.dp.toPx()
+
+                    for (i in 0 until points.size - 1) {
+                        val segStart = cumulativeDistances[i]
+                        val segEnd = cumulativeDistances[i + 1]
+                        val isActive = segEnd >= lowMeters && segStart <= highMeters
+                        drawLine(
+                            color = if (isActive) trackColor else inactiveColor,
+                            start = toOffset(points[i]),
+                            end = toOffset(points[i + 1]),
+                            strokeWidth = if (isActive) activeStrokeWidth else inactiveStrokeWidth,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+
+                    // --- Track endpoint bars (perpendicular to track direction) ---
+                    val endpointBarLen = 8.dp.toPx()
+                    val endpointStroke = 3.dp.toPx()
+                    val endpointColor = trackColor.copy(alpha = 0.5f)
+
+                    if (points.size >= 2) {
+                        val p0 = toOffset(points[0])
+                        val p1 = toOffset(points[1])
+                        val dx0 = p1.x - p0.x
+                        val dy0 = p1.y - p0.y
+                        val len0 = kotlin.math.sqrt(dx0 * dx0 + dy0 * dy0)
+                        if (len0 > 0.1f) {
+                            val perpX = -dy0 / len0 * endpointBarLen
+                            val perpY = dx0 / len0 * endpointBarLen
+                            drawLine(endpointColor, Offset(p0.x + perpX, p0.y + perpY), Offset(p0.x - perpX, p0.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
+                        }
+
+                        val pN = toOffset(points.last())
+                        val pPrev = toOffset(points[points.size - 2])
+                        val dxN = pN.x - pPrev.x
+                        val dyN = pN.y - pPrev.y
+                        val lenN = kotlin.math.sqrt(dxN * dxN + dyN * dyN)
+                        if (lenN > 0.1f) {
+                            val perpX = -dyN / lenN * endpointBarLen
+                            val perpY = dxN / lenN * endpointBarLen
+                            drawLine(endpointColor, Offset(pN.x + perpX, pN.y + perpY), Offset(pN.x - perpX, pN.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
+                        }
+                    }
+
+                    // --- Direction arrows along active segment ---
+                    if (rangeMeters > 1.0) {
+                        val arrowLen = 8.dp.toPx()
+                        val arrowHalfW = 5.dp.toPx()
+                        val lookAhead = (rangeMeters * 0.01).coerceAtLeast(50.0)
+                        val arrowFractions = listOf(0.25f, 0.5f, 0.75f)
+                        for (frac in arrowFractions) {
+                            val m = lowMeters + rangeMeters * frac
+                            val mAhead = if (isReversed) (m - lookAhead).coerceAtLeast(lowMeters)
+                                         else (m + lookAhead).coerceAtMost(highMeters)
+                            if (kotlin.math.abs(mAhead - m) < 1.0) continue
+                            val pt = toOffset(positionAtMeters(m))
+                            val ptAhead = toOffset(positionAtMeters(mAhead))
+                            val dx = ptAhead.x - pt.x
+                            val dy = ptAhead.y - pt.y
+                            val len = kotlin.math.sqrt(dx * dx + dy * dy)
+                            if (len < 0.1f) continue
+                            val ux = dx / len
+                            val uy = dy / len
+                            val px = -uy
+                            val py = ux
+                            val tipX = pt.x + ux * arrowLen
+                            val tipY = pt.y + uy * arrowLen
+                            val baseLeftX = pt.x - ux * arrowLen * 0.3f + px * arrowHalfW
+                            val baseLeftY = pt.y - uy * arrowLen * 0.3f + py * arrowHalfW
+                            val baseRightX = pt.x - ux * arrowLen * 0.3f - px * arrowHalfW
+                            val baseRightY = pt.y - uy * arrowLen * 0.3f - py * arrowHalfW
+                            val arrowPath = androidx.compose.ui.graphics.Path().apply {
+                                moveTo(tipX, tipY)
+                                lineTo(baseLeftX, baseLeftY)
+                                lineTo(baseRightX, baseRightY)
+                                close()
+                            }
+                            drawPath(arrowPath, color = Color.White)
+                            drawPath(
+                                arrowPath,
+                                color = trackColor,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f.dp.toPx()),
+                            )
+                        }
+
+                        // Distance label at midpoint of active range
+                        val midPt = toOffset(positionAtMeters(lowMeters + rangeMeters * 0.5))
+                        val distLabel = "%.1f km".format(rangeMeters / 1000.0)
+                        val distPaint = android.graphics.Paint().apply {
+                            color = 0xFF333333.toInt()
+                            textSize = 9.sp.toPx()
+                            isAntiAlias = true
+                            typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        }
+                        val distTextW = distPaint.measureText(distLabel)
+                        val distBgPaint = android.graphics.Paint().apply {
+                            color = 0xCCFFFFFF.toInt()
+                            isAntiAlias = true
+                        }
+                        val labelY = midPt.y - 10.dp.toPx()
+                        drawContext.canvas.nativeCanvas.drawRoundRect(
+                            midPt.x - distTextW / 2 - 4.dp.toPx(),
+                            labelY - 9.sp.toPx(),
+                            midPt.x + distTextW / 2 + 4.dp.toPx(),
+                            labelY + 3.dp.toPx(),
+                            4.dp.toPx(), 4.dp.toPx(), distBgPaint,
+                        )
+                        drawContext.canvas.nativeCanvas.drawText(
+                            distLabel,
+                            midPt.x - distTextW / 2,
+                            labelY,
+                            distPaint,
+                        )
+                    }
+
+                    // --- Start flag marker (draggable) ---
+                    val startPos = toOffset(positionAtMeters(startMeters))
+                    val flagPole = 28.dp.toPx()
+                    val flagW = 16.dp.toPx()
+                    val flagH = 12.dp.toPx()
+                    val poleWidth = 2.5f.dp.toPx()
+                    val baseR = 5.dp.toPx()
+                    val startGreen = Color(0xFF4CAF50)
+
+                    drawLine(
+                        color = startGreen,
+                        start = Offset(startPos.x, startPos.y),
+                        end = Offset(startPos.x, startPos.y - flagPole),
+                        strokeWidth = poleWidth,
+                        cap = StrokeCap.Round,
+                    )
+                    drawRect(
+                        color = startGreen,
+                        topLeft = Offset(startPos.x, startPos.y - flagPole),
+                        size = Size(flagW, flagH),
+                    )
+                    val cellW = flagW / 2f
+                    val cellH = flagH / 2f
+                    val flagTop = startPos.y - flagPole
+                    drawRect(color = Color.White, topLeft = Offset(startPos.x, flagTop), size = Size(cellW, cellH))
+                    drawRect(color = Color.White, topLeft = Offset(startPos.x + cellW, flagTop + cellH), size = Size(cellW, cellH))
+                    drawCircle(color = startGreen, radius = baseR, center = startPos)
+                    drawCircle(color = Color.White, radius = baseR * 0.5f, center = startPos)
+
+                    // --- End flag marker (draggable) ---
+                    val endPos = toOffset(positionAtMeters(endMeters))
+                    val endBlue = Color(0xFF2196F3)
+
+                    drawLine(
+                        color = endBlue,
+                        start = Offset(endPos.x, endPos.y),
+                        end = Offset(endPos.x, endPos.y - flagPole),
+                        strokeWidth = poleWidth,
+                        cap = StrokeCap.Round,
+                    )
+                    drawRect(
+                        color = endBlue,
+                        topLeft = Offset(endPos.x - flagW, endPos.y - flagPole),
+                        size = Size(flagW, flagH),
+                    )
+                    val endFlagTop = endPos.y - flagPole
+                    drawRect(color = Color.White, topLeft = Offset(endPos.x - flagW, endFlagTop), size = Size(cellW, cellH))
+                    drawRect(color = Color.White, topLeft = Offset(endPos.x - cellW, endFlagTop + cellH), size = Size(cellW, cellH))
+                    drawCircle(color = endBlue, radius = baseR, center = endPos)
+                    drawCircle(color = Color.White, radius = baseR * 0.5f, center = endPos)
+
+                    // --- Km labels using native canvas ---
+                    val nativeCanvas = drawContext.canvas.nativeCanvas
+                    val textSizePx = 10.sp.toPx()
+                    val startLabel = "%.1f km".format(startKm)
+                    val endLabel = "%.1f km".format(endKm)
+
+                    val startLabelPaint = android.graphics.Paint().apply {
+                        color = 0xFF2E7D32.toInt()
+                        this.textSize = textSizePx
                         isAntiAlias = true
                         typeface = android.graphics.Typeface.DEFAULT_BOLD
                     }
-                    val distTextW = distPaint.measureText(distLabel)
-                    val distBgPaint = android.graphics.Paint().apply {
-                        color = 0xCCFFFFFF.toInt()
+                    val endLabelPaint = android.graphics.Paint().apply {
+                        color = 0xFF1565C0.toInt()
+                        this.textSize = textSizePx
+                        isAntiAlias = true
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    }
+
+                    val labelOffY = baseR + textSizePx + 2.dp.toPx()
+                    val startTextW = startLabelPaint.measureText(startLabel)
+                    val bgPaint = android.graphics.Paint().apply {
+                        color = 0xDDFFFFFF.toInt()
                         isAntiAlias = true
                     }
-                    val labelY = midPt.y - 10.dp.toPx()
-                    drawContext.canvas.nativeCanvas.drawRoundRect(
-                        midPt.x - distTextW / 2 - 4.dp.toPx(),
-                        labelY - 9.sp.toPx(),
-                        midPt.x + distTextW / 2 + 4.dp.toPx(),
-                        labelY + 3.dp.toPx(),
-                        4.dp.toPx(), 4.dp.toPx(), distBgPaint,
+                    nativeCanvas.drawRoundRect(
+                        startPos.x - startTextW / 2 - 3.dp.toPx(),
+                        startPos.y + labelOffY - textSizePx,
+                        startPos.x + startTextW / 2 + 3.dp.toPx(),
+                        startPos.y + labelOffY + 3.dp.toPx(),
+                        4.dp.toPx(), 4.dp.toPx(), bgPaint,
                     )
-                    drawContext.canvas.nativeCanvas.drawText(
-                        distLabel,
-                        midPt.x - distTextW / 2,
-                        labelY,
-                        distPaint,
+                    nativeCanvas.drawText(
+                        startLabel,
+                        startPos.x - startTextW / 2,
+                        startPos.y + labelOffY,
+                        startLabelPaint,
                     )
+
+                    val endTextW = endLabelPaint.measureText(endLabel)
+                    nativeCanvas.drawRoundRect(
+                        endPos.x - endTextW / 2 - 3.dp.toPx(),
+                        endPos.y + labelOffY - textSizePx,
+                        endPos.x + endTextW / 2 + 3.dp.toPx(),
+                        endPos.y + labelOffY + 3.dp.toPx(),
+                        4.dp.toPx(), 4.dp.toPx(), bgPaint,
+                    )
+                    nativeCanvas.drawText(
+                        endLabel,
+                        endPos.x - endTextW / 2,
+                        endPos.y + labelOffY,
+                        endLabelPaint,
+                    )
+
+                    // Red dot: current position (while mocking)
+                    currentPoint?.let { cp ->
+                        drawCircle(color = Color(0xFFF44336), radius = 8.dp.toPx(), center = toOffset(cp))
+                        drawCircle(color = Color.White, radius = 4.dp.toPx(), center = toOffset(cp))
+                    }
                 }
 
-                // --- Start flag marker (draggable) ---
-                val startPos = toOffset(positionAtMeters(startMeters))
-                val flagPole = 28.dp.toPx()
-                val flagW = 16.dp.toPx()
-                val flagH = 12.dp.toPx()
-                val poleWidth = 2.5f.dp.toPx()
-                val baseR = 5.dp.toPx()
-                val startGreen = Color(0xFF4CAF50)
-
-                // Pole
-                drawLine(
-                    color = startGreen,
-                    start = Offset(startPos.x, startPos.y),
-                    end = Offset(startPos.x, startPos.y - flagPole),
-                    strokeWidth = poleWidth,
-                    cap = StrokeCap.Round,
-                )
-                // Flag (filled rectangle at top of pole)
-                drawRect(
-                    color = startGreen,
-                    topLeft = Offset(startPos.x, startPos.y - flagPole),
-                    size = Size(flagW, flagH),
-                )
-                // Checkerboard pattern on flag (2x2 grid)
-                val cellW = flagW / 2f
-                val cellH = flagH / 2f
-                val flagTop = startPos.y - flagPole
-                drawRect(color = Color.White, topLeft = Offset(startPos.x, flagTop), size = Size(cellW, cellH))
-                drawRect(color = Color.White, topLeft = Offset(startPos.x + cellW, flagTop + cellH), size = Size(cellW, cellH))
-                // Base circle for grab handle
-                drawCircle(color = startGreen, radius = baseR, center = startPos)
-                drawCircle(color = Color.White, radius = baseR * 0.5f, center = startPos)
-
-                // --- End flag marker (draggable) ---
-                val endPos = toOffset(positionAtMeters(endMeters))
-                val endBlue = Color(0xFF2196F3)
-
-                // Pole
-                drawLine(
-                    color = endBlue,
-                    start = Offset(endPos.x, endPos.y),
-                    end = Offset(endPos.x, endPos.y - flagPole),
-                    strokeWidth = poleWidth,
-                    cap = StrokeCap.Round,
-                )
-                // Flag (filled rectangle at top of pole)
-                drawRect(
-                    color = endBlue,
-                    topLeft = Offset(endPos.x - flagW, endPos.y - flagPole),
-                    size = Size(flagW, flagH),
-                )
-                // Checkered finish pattern on flag (2x2 grid)
-                val endFlagTop = endPos.y - flagPole
-                drawRect(color = Color.White, topLeft = Offset(endPos.x - flagW, endFlagTop), size = Size(cellW, cellH))
-                drawRect(color = Color.White, topLeft = Offset(endPos.x - cellW, endFlagTop + cellH), size = Size(cellW, cellH))
-                // Base circle for grab handle
-                drawCircle(color = endBlue, radius = baseR, center = endPos)
-                drawCircle(color = Color.White, radius = baseR * 0.5f, center = endPos)
-
-                // --- Km labels using native canvas ---
-                val nativeCanvas = drawContext.canvas.nativeCanvas
-                val textSizePx = 10.sp.toPx()
-                val startLabel = "%.1f km".format(startKm)
-                val endLabel = "%.1f km".format(endKm)
-
-                val startLabelPaint = android.graphics.Paint().apply {
-                    color = 0xFF2E7D32.toInt() // dark green
-                    this.textSize = textSizePx
-                    isAntiAlias = true
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                }
-                val endLabelPaint = android.graphics.Paint().apply {
-                    color = 0xFF1565C0.toInt() // dark blue
-                    this.textSize = textSizePx
-                    isAntiAlias = true
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                }
-
-                // Draw background + text for start label (below base circle)
-                val labelOffY = baseR + textSizePx + 2.dp.toPx()
-                val startTextW = startLabelPaint.measureText(startLabel)
-                val bgPaint = android.graphics.Paint().apply {
-                    color = 0xDDFFFFFF.toInt()
-                    isAntiAlias = true
-                }
-                nativeCanvas.drawRoundRect(
-                    startPos.x - startTextW / 2 - 3.dp.toPx(),
-                    startPos.y + labelOffY - textSizePx,
-                    startPos.x + startTextW / 2 + 3.dp.toPx(),
-                    startPos.y + labelOffY + 3.dp.toPx(),
-                    4.dp.toPx(), 4.dp.toPx(), bgPaint,
-                )
-                nativeCanvas.drawText(
-                    startLabel,
-                    startPos.x - startTextW / 2,
-                    startPos.y + labelOffY,
-                    startLabelPaint,
-                )
-
-                // Draw background + text for end label (below base circle)
-                val endTextW = endLabelPaint.measureText(endLabel)
-                nativeCanvas.drawRoundRect(
-                    endPos.x - endTextW / 2 - 3.dp.toPx(),
-                    endPos.y + labelOffY - textSizePx,
-                    endPos.x + endTextW / 2 + 3.dp.toPx(),
-                    endPos.y + labelOffY + 3.dp.toPx(),
-                    4.dp.toPx(), 4.dp.toPx(), bgPaint,
-                )
-                nativeCanvas.drawText(
-                    endLabel,
-                    endPos.x - endTextW / 2,
-                    endPos.y + labelOffY,
-                    endLabelPaint,
-                )
-
-                // Red dot: current position (while mocking)
-                currentPoint?.let { cp ->
-                    drawCircle(color = Color(0xFFF44336), radius = 8.dp.toPx(), center = toOffset(cp))
-                    drawCircle(color = Color.White, radius = 4.dp.toPx(), center = toOffset(cp))
+                // Loading overlay when replacing track while one is already shown
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Loading track\u2026",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1251,6 +1473,68 @@ private fun MockLocationPermissionDialog(
                 Text("Open Settings")
             }
         },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun TrackSelectionDialog(
+    tracks: List<GpxTrack>,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Select Track") },
+        text = {
+            Column {
+                Text(
+                    "This file contains ${tracks.size} tracks. Choose one to load:",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                tracks.forEachIndexed { index, track ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(index) },
+                        shape = RoundedCornerShape(8.dp),
+                        tonalElevation = 2.dp,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Default.Route,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = track.name ?: "Track ${index + 1}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "${track.points.size} points · ${"%.1f".format(track.totalDistanceMeters / 1000)} km",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    if (index < tracks.lastIndex) Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
+        },
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")

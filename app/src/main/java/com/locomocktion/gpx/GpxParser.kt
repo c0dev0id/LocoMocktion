@@ -117,16 +117,19 @@ fun simplifyTrack(
 }
 
 /**
- * Parses a GPX file and extracts track points from all track segments.
+ * Parses a GPX file and extracts tracks. Each `<trk>` element becomes a
+ * separate [GpxTrack] so the caller can let the user choose when a file
+ * contains more than one track.
  */
-fun parseGpx(input: InputStream): GpxTrack {
+fun parseGpx(input: InputStream): List<GpxTrack> {
     val factory = XmlPullParserFactory.newInstance()
     factory.isNamespaceAware = false
     val parser = factory.newPullParser()
     parser.setInput(input, null)
 
-    var trackName: String? = null
-    val points = mutableListOf<TrackPoint>()
+    val tracks = mutableListOf<GpxTrack>()
+    var currentTrackName: String? = null
+    var currentPoints = mutableListOf<TrackPoint>()
 
     var inTrk = false
     var inTrkName = false
@@ -142,7 +145,11 @@ fun parseGpx(input: InputStream): GpxTrack {
         when (event) {
             XmlPullParser.START_TAG -> {
                 when (parser.name) {
-                    "trk" -> inTrk = true
+                    "trk" -> {
+                        inTrk = true
+                        currentTrackName = null
+                        currentPoints = mutableListOf()
+                    }
                     "name" -> if (inTrk && !inTrkpt) inTrkName = true
                     "trkpt" -> {
                         inTrkpt = true
@@ -155,7 +162,7 @@ fun parseGpx(input: InputStream): GpxTrack {
             }
             XmlPullParser.TEXT -> {
                 if (inTrkName) {
-                    trackName = parser.text?.trim()
+                    currentTrackName = parser.text?.trim()
                 }
                 if (inEle) {
                     ele = parser.text?.trim()?.toDoubleOrNull()
@@ -163,11 +170,16 @@ fun parseGpx(input: InputStream): GpxTrack {
             }
             XmlPullParser.END_TAG -> {
                 when (parser.name) {
-                    "trk" -> inTrk = false
+                    "trk" -> {
+                        if (currentPoints.isNotEmpty()) {
+                            tracks.add(GpxTrack(name = currentTrackName, points = currentPoints.toList()))
+                        }
+                        inTrk = false
+                    }
                     "name" -> inTrkName = false
                     "trkpt" -> {
                         if (lat != null && lon != null) {
-                            points.add(TrackPoint(lat!!, lon!!, ele))
+                            currentPoints.add(TrackPoint(lat!!, lon!!, ele))
                         }
                         inTrkpt = false
                     }
@@ -178,5 +190,10 @@ fun parseGpx(input: InputStream): GpxTrack {
         event = parser.next()
     }
 
-    return GpxTrack(name = trackName, points = points)
+    // Handle malformed GPX where <trk> was never closed
+    if (tracks.isEmpty() && currentPoints.isNotEmpty()) {
+        tracks.add(GpxTrack(name = currentTrackName, points = currentPoints.toList()))
+    }
+
+    return tracks
 }
