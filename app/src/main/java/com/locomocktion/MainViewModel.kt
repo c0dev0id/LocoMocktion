@@ -30,6 +30,7 @@ data class UiState(
     val error: String? = null,
     val isLoading: Boolean = false,
     val availableTracks: List<GpxTrack>? = null,
+    val showTrackSelector: Boolean = false,
     val pendingUri: String? = null,
     val pendingDisplayName: String? = null,
 )
@@ -49,12 +50,13 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     init {
         val lastUri = prefs.getString("last_gpx_uri", null)
         val lastName = prefs.getString("last_gpx_name", null)
+        val lastTrackIndex = prefs.getInt("last_gpx_track_index", -1)
         if (lastUri != null) {
-            loadGpx(Uri.parse(lastUri), lastName)
+            loadGpx(Uri.parse(lastUri), lastName, autoSelectIndex = lastTrackIndex)
         }
     }
 
-    fun loadGpx(uri: Uri, displayName: String?) {
+    fun loadGpx(uri: Uri, displayName: String?, autoSelectIndex: Int = -1) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
@@ -69,13 +71,16 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 if (allTracks.size == 1) {
-                    applyTrack(allTracks[0], uri, displayName)
+                    applyTrack(allTracks[0], 0, uri, displayName, allTracks)
+                } else if (autoSelectIndex in allTracks.indices) {
+                    applyTrack(allTracks[autoSelectIndex], autoSelectIndex, uri, displayName, allTracks)
                 } else {
                     // Multiple tracks – let the user choose
                     _uiState.update {
                         it.copy(
                             isLoading = false,
                             availableTracks = allTracks,
+                            showTrackSelector = true,
                             pendingUri = uri.toString(),
                             pendingDisplayName = displayName,
                         )
@@ -94,18 +99,31 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         val uri = state.pendingUri?.let { Uri.parse(it) }
         val name = state.pendingDisplayName
         _uiState.update {
-            it.copy(availableTracks = null, pendingUri = null, pendingDisplayName = null, isLoading = true)
+            it.copy(showTrackSelector = false, isLoading = true)
         }
         viewModelScope.launch(Dispatchers.IO) {
-            applyTrack(track, uri, name)
+            applyTrack(track, index, uri, name, tracks)
+        }
+    }
+
+    fun showTrackSelection() {
+        val state = _uiState.value
+        if (state.availableTracks != null && state.availableTracks.size > 1) {
+            _uiState.update { it.copy(showTrackSelector = true) }
         }
     }
 
     fun dismissTrackSelection() {
-        _uiState.update { it.copy(availableTracks = null, pendingUri = null, pendingDisplayName = null) }
+        _uiState.update { it.copy(showTrackSelector = false) }
     }
 
-    private fun applyTrack(raw: GpxTrack, uri: Uri?, displayName: String?) {
+    private fun applyTrack(
+        raw: GpxTrack,
+        trackIndex: Int,
+        uri: Uri?,
+        displayName: String?,
+        allTracks: List<GpxTrack>,
+    ) {
         val simplified = raw.copy(points = simplifyTrack(raw.points))
         if (simplified.points.isEmpty()) {
             _uiState.update { it.copy(isLoading = false, error = "Track contains no points") }
@@ -123,12 +141,16 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                 endKm = (simplified.totalDistanceMeters / 1000).toFloat(),
                 error = null,
                 isLoading = false,
+                availableTracks = allTracks,
+                pendingUri = uri?.toString(),
+                pendingDisplayName = displayName,
             )
         }
         if (uri != null) {
             prefs.edit()
                 .putString("last_gpx_uri", uri.toString())
                 .putString("last_gpx_name", name)
+                .putInt("last_gpx_track_index", trackIndex)
                 .apply()
         }
     }

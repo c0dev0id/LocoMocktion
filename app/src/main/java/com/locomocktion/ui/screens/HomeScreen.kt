@@ -96,12 +96,14 @@ fun HomeScreen(viewModel: MainViewModel) {
         )
     }
 
-    uiState.availableTracks?.let { tracks ->
-        TrackSelectionDialog(
-            tracks = tracks,
-            onSelect = viewModel::selectTrack,
-            onDismiss = viewModel::dismissTrackSelection,
-        )
+    if (uiState.showTrackSelector) {
+        uiState.availableTracks?.let { tracks ->
+            TrackSelectionDialog(
+                tracks = tracks,
+                onSelect = viewModel::selectTrack,
+                onDismiss = viewModel::dismissTrackSelection,
+            )
+        }
     }
 
     val onPickFile = { filePicker.launch(arrayOf("application/*", "*/*")) }
@@ -185,6 +187,8 @@ private fun PortraitContent(
             track = uiState.track,
             isRunning = isRunning,
             onPickFile = onPickFile,
+            hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
+            onSelectTrack = viewModel::showTrackSelection,
         )
 
         TrackPreviewCard(
@@ -267,6 +271,8 @@ private fun LandscapeContent(
                 track = uiState.track,
                 isRunning = isRunning,
                 onPickFile = onPickFile,
+                hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
+                onSelectTrack = viewModel::showTrackSelection,
                 isCompact = true,
             )
 
@@ -358,6 +364,8 @@ private fun FileSelectionCard(
     track: GpxTrack?,
     isRunning: Boolean,
     onPickFile: () -> Unit,
+    hasMultipleTracks: Boolean = false,
+    onSelectTrack: () -> Unit = {},
     isCompact: Boolean = false,
 ) {
     if (isCompact) {
@@ -394,6 +402,17 @@ private fun FileSelectionCard(
                     }
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
+                }
+                if (hasMultipleTracks) {
+                    OutlinedButton(
+                        onClick = onSelectTrack,
+                        enabled = !isRunning,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    ) {
+                        Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Tracks", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
                 OutlinedButton(
                     onClick = onPickFile,
@@ -440,14 +459,29 @@ private fun FileSelectionCard(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                OutlinedButton(
-                    onClick = onPickFile,
-                    enabled = !isRunning,
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(Icons.Default.FileOpen, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (fileName == null) "Select GPX file" else "Change file")
+                    OutlinedButton(
+                        onClick = onPickFile,
+                        enabled = !isRunning,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Default.FileOpen, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (fileName == null) "Select GPX file" else "Change file")
+                    }
+                    if (hasMultipleTracks) {
+                        OutlinedButton(
+                            onClick = onSelectTrack,
+                            enabled = !isRunning,
+                        ) {
+                            Icon(Icons.Default.List, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Tracks")
+                        }
+                    }
                 }
             }
         }
