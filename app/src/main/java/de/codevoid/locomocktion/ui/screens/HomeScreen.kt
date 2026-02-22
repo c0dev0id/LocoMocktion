@@ -606,17 +606,20 @@ private fun TrackPreviewCard(
     val currentEndKm by rememberUpdatedState(endKm)
     val currentIsRunning by rememberUpdatedState(isRunning)
 
-    // --- Zoom state ---
+    // --- Zoom / rotation state ---
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var rotationAngle by remember { mutableFloatStateOf(0f) }
     var zoomedToSelection by remember { mutableStateOf(false) }
     val currentZoomScale by rememberUpdatedState(zoomScale)
     val currentPanOffset by rememberUpdatedState(panOffset)
+    val currentRotationAngle by rememberUpdatedState(rotationAngle)
 
-    // Reset zoom when track changes
+    // Reset zoom/rotation when track changes
     LaunchedEffect(track) {
         zoomScale = 1f
         panOffset = Offset.Zero
+        rotationAngle = 0f
         zoomedToSelection = false
     }
 
@@ -674,11 +677,13 @@ private fun TrackPreviewCard(
 
         zoomScale = newScale
         panOffset = Offset(panX, panY)
+        rotationAngle = 0f
     }
 
     fun resetZoom() {
         zoomScale = 1f
         panOffset = Offset.Zero
+        rotationAngle = 0f
     }
 
     val cardPadding = if (isCompact) 8.dp else 16.dp
@@ -744,13 +749,27 @@ private fun TrackPreviewCard(
                             val drawH = canvasH - 2 * paddingPx
                             val hitRadiusPx = 32.dp.toPx()
 
+                            fun rotateAroundCenter(pos: Offset, angle: Float): Offset {
+                                val cx = canvasW / 2f
+                                val cy = canvasH / 2f
+                                val cos = kotlin.math.cos(angle.toDouble()).toFloat()
+                                val sin = kotlin.math.sin(angle.toDouble()).toFloat()
+                                val dx = pos.x - cx
+                                val dy = pos.y - cy
+                                return Offset(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+                            }
+
+                            fun unrotateAroundCenter(pos: Offset, angle: Float): Offset =
+                                rotateAroundCenter(pos, -angle)
+
                             fun toScreen(p: TrackPoint): Offset {
                                 val rawX = ((p.longitude - minLon) / lonRange * drawW + paddingPx).toFloat()
                                 val rawY = ((1 - (p.latitude - minLat) / latRange) * drawH + paddingPx).toFloat()
-                                return Offset(
+                                val zoomed = Offset(
                                     rawX * currentZoomScale + currentPanOffset.x,
                                     rawY * currentZoomScale + currentPanOffset.y,
                                 )
+                                return rotateAroundCenter(zoomed, currentRotationAngle)
                             }
 
                             fun nearestMetersOnTrack(touchPos: Offset): Double {
@@ -814,11 +833,13 @@ private fun TrackPreviewCard(
                                         }
                                     } while (event.changes.any { it.pressed })
                                 } else {
-                                    // Pinch-to-zoom / two-finger pan
+                                    // Pinch-to-zoom / two-finger pan / rotation
                                     down.consume()
                                     var prevCentroid = down.position
                                     var prevSpread = 0f
+                                    var prevAngle = 0f
                                     var pinching = false
+                                    var prevFingerCount = 1
                                     do {
                                         val event = awaitPointerEvent()
                                         val pressed = event.changes.filter { it.pressed }
@@ -829,33 +850,61 @@ private fun TrackPreviewCard(
                                             pressed.map { it.position.x }.average().toFloat(),
                                             pressed.map { it.position.y }.average().toFloat(),
                                         )
-                                        if (pressed.size >= 2) {
+                                        val fingerCount = pressed.size
+
+                                        if (fingerCount >= 2) {
+                                            val sorted = pressed.sortedBy { it.id.value }
+                                            val p0 = sorted[0].position
+                                            val p1 = sorted[1].position
+
                                             val spread = pressed.maxOf {
                                                 val dx = it.position.x - centroid.x
                                                 val dy = it.position.y - centroid.y
                                                 kotlin.math.sqrt(dx * dx + dy * dy)
                                             }
+                                            val angle = kotlin.math.atan2(
+                                                (p1.y - p0.y).toDouble(),
+                                                (p1.x - p0.x).toDouble(),
+                                            ).toFloat()
+
                                             if (pinching && prevSpread > 1f) {
+                                                // Zoom around centroid (un-rotated to content space)
                                                 val scaleFactor = spread / prevSpread
                                                 val newScale = (zoomScale * scaleFactor).coerceIn(1f, 20f)
-                                                // Zoom around centroid
-                                                val focalX = centroid.x
-                                                val focalY = centroid.y
+                                                val contentFocal = unrotateAroundCenter(centroid, rotationAngle)
                                                 panOffset = Offset(
-                                                    focalX - (focalX - panOffset.x) * (newScale / zoomScale),
-                                                    focalY - (focalY - panOffset.y) * (newScale / zoomScale),
+                                                    contentFocal.x - (contentFocal.x - panOffset.x) * (newScale / zoomScale),
+                                                    contentFocal.y - (contentFocal.y - panOffset.y) * (newScale / zoomScale),
                                                 )
                                                 zoomScale = newScale
+
+                                                // Rotation
+                                                var angleDelta = angle - prevAngle
+                                                while (angleDelta > kotlin.math.PI.toFloat()) angleDelta -= (2 * kotlin.math.PI).toFloat()
+                                                while (angleDelta < -kotlin.math.PI.toFloat()) angleDelta += (2 * kotlin.math.PI).toFloat()
+                                                rotationAngle += angleDelta
                                             }
                                             prevSpread = spread
+                                            prevAngle = angle
                                             pinching = true
                                         }
-                                        // Pan (works for single and multi-finger)
-                                        val delta = centroid - prevCentroid
-                                        if (zoomScale > 1f) {
-                                            panOffset += delta
+
+                                        // Pan — skip when finger count changes to avoid jump
+                                        if (fingerCount == prevFingerCount) {
+                                            val delta = centroid - prevCentroid
+                                            if (zoomScale > 1f || rotationAngle != 0f) {
+                                                // Un-rotate screen-space delta to content space
+                                                val cos = kotlin.math.cos(-rotationAngle.toDouble()).toFloat()
+                                                val sin = kotlin.math.sin(-rotationAngle.toDouble()).toFloat()
+                                                panOffset += Offset(
+                                                    delta.x * cos - delta.y * sin,
+                                                    delta.x * sin + delta.y * cos,
+                                                )
+                                            }
                                         }
+
                                         prevCentroid = centroid
+                                        prevFingerCount = fingerCount
                                         zoomedToSelection = false
                                     } while (event.changes.any { it.pressed })
                                 }
@@ -868,13 +917,24 @@ private fun TrackPreviewCard(
                     val w = size.width - 2 * paddingPx
                     val h = size.height - 2 * paddingPx
 
+                    fun rotateAroundCenter(pos: Offset, angle: Float): Offset {
+                        val cx = size.width / 2f
+                        val cy = size.height / 2f
+                        val cos = kotlin.math.cos(angle.toDouble()).toFloat()
+                        val sin = kotlin.math.sin(angle.toDouble()).toFloat()
+                        val dx = pos.x - cx
+                        val dy = pos.y - cy
+                        return Offset(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+                    }
+
                     fun toOffset(p: TrackPoint): Offset {
                         val rawX = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
                         val rawY = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
-                        return Offset(
+                        val zoomed = Offset(
                             rawX * zoomScale + panOffset.x,
                             rawY * zoomScale + panOffset.y,
                         )
+                        return rotateAroundCenter(zoomed, rotationAngle)
                     }
 
                     // Draw track line: active range in full color, inactive in faded
