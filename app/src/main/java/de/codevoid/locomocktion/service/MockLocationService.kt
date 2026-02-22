@@ -1,4 +1,4 @@
-package com.locomocktion.service
+package de.codevoid.locomocktion.service
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -16,10 +16,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
-import com.locomocktion.MainActivity
-import com.locomocktion.R
-import com.locomocktion.gpx.TrackPoint
-import com.locomocktion.gpx.distanceBetween
+import de.codevoid.locomocktion.MainActivity
+import de.codevoid.locomocktion.R
+import de.codevoid.locomocktion.gpx.TrackPoint
+import de.codevoid.locomocktion.gpx.distanceBetween
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

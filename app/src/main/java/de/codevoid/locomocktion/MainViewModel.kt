@@ -1,4 +1,4 @@
-package com.locomocktion
+package de.codevoid.locomocktion
 
 import android.app.Application
 import android.content.Context
@@ -6,12 +6,12 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.locomocktion.gpx.GpxTrack
-import com.locomocktion.gpx.TrackPoint
-import com.locomocktion.gpx.distanceBetween
-import com.locomocktion.gpx.parseGpx
-import com.locomocktion.service.MockLocationService
-import com.locomocktion.service.TravelMode
+import de.codevoid.locomocktion.gpx.GpxTrack
+import de.codevoid.locomocktion.gpx.TrackPoint
+import de.codevoid.locomocktion.gpx.distanceBetween
+import de.codevoid.locomocktion.gpx.parseGpx
+import de.codevoid.locomocktion.service.MockLocationService
+import de.codevoid.locomocktion.service.TravelMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch

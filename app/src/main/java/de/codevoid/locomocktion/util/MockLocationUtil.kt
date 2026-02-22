@@ -1,4 +1,4 @@
-package com.locomocktion.util
+package de.codevoid.locomocktion.util
 
 import android.app.AppOpsManager
 import android.content.Context

@@ -1,4 +1,4 @@
-package com.locomocktion.ui.theme
+package de.codevoid.locomocktion.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

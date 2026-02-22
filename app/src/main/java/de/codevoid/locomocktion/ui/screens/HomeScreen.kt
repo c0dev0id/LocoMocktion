@@ -1,4 +1,4 @@
-package com.locomocktion.ui.screens
+package de.codevoid.locomocktion.ui.screens
 
 import android.content.Intent
 import android.content.res.Configuration
@@ -39,12 +39,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.locomocktion.MainViewModel
-import com.locomocktion.gpx.GpxTrack
-import com.locomocktion.gpx.TrackPoint
-import com.locomocktion.gpx.distanceBetween
-import com.locomocktion.service.TravelMode
-import com.locomocktion.util.isMockLocationEnabled
+import de.codevoid.locomocktion.MainViewModel
+import de.codevoid.locomocktion.gpx.GpxTrack
+import de.codevoid.locomocktion.gpx.TrackPoint
+import de.codevoid.locomocktion.gpx.distanceBetween
+import de.codevoid.locomocktion.service.TravelMode
+import de.codevoid.locomocktion.util.isMockLocationEnabled
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -166,7 +166,7 @@ fun HomeScreen(viewModel: MainViewModel) {
 @Composable
 private fun PortraitContent(
     modifier: Modifier,
-    uiState: com.locomocktion.UiState,
+    uiState: de.codevoid.locomocktion.UiState,
     isRunning: Boolean,
     progress: Float,
     currentPoint: TrackPoint?,
@@ -245,7 +245,7 @@ private fun PortraitContent(
 @Composable
 private fun LandscapeContent(
     modifier: Modifier,
-    uiState: com.locomocktion.UiState,
+    uiState: de.codevoid.locomocktion.UiState,
     isRunning: Boolean,
     progress: Float,
     currentPoint: TrackPoint?,

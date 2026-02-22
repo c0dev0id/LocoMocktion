@@ -1,4 +1,4 @@
-package com.locomocktion
+package de.codevoid.locomocktion
 
 import android.Manifest
 import android.content.Context
@@ -19,8 +19,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.locomocktion.ui.screens.HomeScreen
-import com.locomocktion.ui.theme.LocoMocktionTheme
+import de.codevoid.locomocktion.ui.screens.HomeScreen
+import de.codevoid.locomocktion.ui.theme.LocoMocktionTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

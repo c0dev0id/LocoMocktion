@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.locomocktion"
+    namespace = "de.codevoid.locomocktion"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.locomocktion"
+        applicationId = "de.codevoid.locomocktion"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

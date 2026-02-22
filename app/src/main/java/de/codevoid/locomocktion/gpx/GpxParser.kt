@@ -1,4 +1,4 @@
-package com.locomocktion.gpx
+package de.codevoid.locomocktion.gpx
 
 import android.location.Location
 import org.xmlpull.v1.XmlPullParser
