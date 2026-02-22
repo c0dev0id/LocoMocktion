@@ -20,6 +20,7 @@ data class UiState(
     val track: GpxTrack? = null,
     val fileName: String? = null,
     val speedKmh: Float = 20f,
+    val useGpxSpeed: Boolean = false,
     val updateIntervalMs: Long = 1000L,
     val startKm: Float = 0f,
     val endKm: Float = 0f,
@@ -53,8 +54,9 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         } catch (e: IllegalArgumentException) {
             TravelMode.Normal
         }
+        val savedUseGpxSpeed = prefs.getBoolean("use_gpx_speed", false)
         _uiState.update {
-            it.copy(speedKmh = savedSpeed, updateIntervalMs = savedInterval, travelMode = savedMode)
+            it.copy(speedKmh = savedSpeed, updateIntervalMs = savedInterval, travelMode = savedMode, useGpxSpeed = savedUseGpxSpeed)
         }
 
         val lastUri = prefs.getString("last_gpx_uri", null)
@@ -175,6 +177,12 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putFloat("speed_kmh", kmh).apply()
     }
 
+    fun setUseGpxSpeed(enabled: Boolean) {
+        _uiState.update { it.copy(useGpxSpeed = enabled) }
+        MockLocationService.updateUseGpxSpeed(enabled)
+        prefs.edit().putBoolean("use_gpx_speed", enabled).apply()
+    }
+
     fun setUpdateInterval(ms: Long) {
         _uiState.update { it.copy(updateIntervalMs = ms) }
         MockLocationService.updateInterval(ms)
@@ -209,6 +217,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
        MockLocationService.configure(
            points = track.points,
            speed = state.speedKmh / 3.6f,
+           useGpxSpeed = state.useGpxSpeed,
            intervalMs = state.updateIntervalMs,
            offsetMeters = (state.startKm * 1000).toDouble(),
            endOffsetMeters = (state.endKm * 1000).toDouble(),

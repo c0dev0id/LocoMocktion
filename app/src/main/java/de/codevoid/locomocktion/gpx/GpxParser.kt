@@ -10,6 +10,7 @@ data class TrackPoint(
     val latitude: Double,
     val longitude: Double,
     val elevation: Double? = null,
+    val speed: Double? = null, // m/s, parsed from <speed> or Garmin extension
 )
 
 data class GpxTrack(
@@ -18,6 +19,9 @@ data class GpxTrack(
 ) {
     val totalDistanceMeters: Double by lazy {
         points.zipWithNext { a, b -> distanceBetween(a, b) }.sum()
+    }
+    val hasSpeedData: Boolean by lazy {
+        points.any { it.speed != null }
     }
 }
 
@@ -66,29 +70,35 @@ fun parseGpx(input: InputStream): List<GpxTrack> {
     var inTrkName = false
     var inTrkpt = false
     var inEle = false
+    var inSpeed = false
 
     var lat: Double? = null
     var lon: Double? = null
     var ele: Double? = null
+    var speed: Double? = null
 
     var event = parser.eventType
     while (event != XmlPullParser.END_DOCUMENT) {
         when (event) {
             XmlPullParser.START_TAG -> {
-                when (parser.name) {
-                    "trk" -> {
+                // Strip any namespace prefix for tag matching (e.g. "gpxtpx:speed" -> "speed")
+                val localName = parser.name.substringAfterLast(':')
+                when {
+                    parser.name == "trk" -> {
                         inTrk = true
                         currentTrackName = null
                         currentPoints = mutableListOf()
                     }
-                    "name" -> if (inTrk && !inTrkpt) inTrkName = true
-                    "trkpt" -> {
+                    parser.name == "name" -> if (inTrk && !inTrkpt) inTrkName = true
+                    parser.name == "trkpt" -> {
                         inTrkpt = true
                         lat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
                         lon = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
                         ele = null
+                        speed = null
                     }
-                    "ele" -> if (inTrkpt) inEle = true
+                    localName == "ele" && inTrkpt -> inEle = true
+                    localName == "speed" && inTrkpt -> inSpeed = true
                 }
             }
             XmlPullParser.TEXT -> {
@@ -98,23 +108,28 @@ fun parseGpx(input: InputStream): List<GpxTrack> {
                 if (inEle) {
                     ele = parser.text?.trim()?.toDoubleOrNull()
                 }
+                if (inSpeed) {
+                    speed = parser.text?.trim()?.toDoubleOrNull()
+                }
             }
             XmlPullParser.END_TAG -> {
-                when (parser.name) {
-                    "trk" -> {
+                val localName = parser.name.substringAfterLast(':')
+                when {
+                    parser.name == "trk" -> {
                         if (currentPoints.isNotEmpty()) {
                             tracks.add(GpxTrack(name = currentTrackName, points = currentPoints.toList()))
                         }
                         inTrk = false
                     }
-                    "name" -> inTrkName = false
-                    "trkpt" -> {
+                    parser.name == "name" -> inTrkName = false
+                    parser.name == "trkpt" -> {
                         if (lat != null && lon != null) {
-                            currentPoints.add(TrackPoint(lat!!, lon!!, ele))
+                            currentPoints.add(TrackPoint(lat!!, lon!!, ele, speed))
                         }
                         inTrkpt = false
                     }
-                    "ele" -> inEle = false
+                    localName == "ele" -> inEle = false
+                    localName == "speed" -> inSpeed = false
                 }
             }
         }

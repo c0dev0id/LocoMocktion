@@ -51,6 +51,7 @@ class MockLocationService : LifecycleService() {
 
         private var trackPoints: List<TrackPoint> = emptyList()
         private var speedMultiplier: Float = 1f
+        private var useGpxSpeed: Boolean = false
         var updateIntervalMs: Long = 1000L
             private set
         private var startOffsetMeters: Double = 0.0
@@ -60,6 +61,7 @@ class MockLocationService : LifecycleService() {
         fun configure(
             points: List<TrackPoint>,
             speed: Float,
+            useGpxSpeed: Boolean = false,
             intervalMs: Long,
             offsetMeters: Double,
             endOffsetMeters: Double,
@@ -67,6 +69,7 @@ class MockLocationService : LifecycleService() {
         ) {
             trackPoints = points
             speedMultiplier = speed
+            this.useGpxSpeed = useGpxSpeed
             updateIntervalMs = intervalMs
             startOffsetMeters = offsetMeters
             this.endOffsetMeters = endOffsetMeters
@@ -75,6 +78,10 @@ class MockLocationService : LifecycleService() {
 
         fun updateSpeed(speed: Float) {
             speedMultiplier = speed
+        }
+
+        fun updateUseGpxSpeed(enabled: Boolean) {
+            useGpxSpeed = enabled
         }
 
         fun updateInterval(ms: Long) {
@@ -250,17 +257,25 @@ class MockLocationService : LifecycleService() {
 
             val point = TrackPoint(lat, lon, ele)
             val bearingVal = if (forward) bearing(from, to) else bearing(to, from)
-            setMockLocation(point, bearingVal.toFloat())
+
+            // Determine effective speed: interpolate GPX speed if available and enabled,
+            // otherwise fall back to the user-configured speed multiplier.
+            val intervalMs = updateIntervalMs
+            val metersPerSecond = if (useGpxSpeed && (from.speed != null || to.speed != null)) {
+                val fromSpeed = from.speed ?: to.speed!!
+                val toSpeed = to.speed ?: from.speed!!
+                (fromSpeed + (toSpeed - fromSpeed) * fraction).coerceAtLeast(0.1)
+            } else {
+                speedMultiplier.toDouble()
+            }
+            val stepMeters = metersPerSecond * (intervalMs / 1000.0)
+
+            setMockLocation(point, bearingVal.toFloat(), metersPerSecond.toFloat())
             _currentPoint.value = point
 
             val progressInLeg = (legTraveled / rangeMeters).toFloat().coerceIn(0f, 1f)
             _progress.value = if (forward) progressInLeg else 1f - progressInLeg
             _distanceTraveled.value = totalTraveled
-
-            // Read current settings each tick so live changes take effect
-            val intervalMs = updateIntervalMs
-            val metersPerSecond = speedMultiplier.toDouble()
-            val stepMeters = metersPerSecond * (intervalMs / 1000.0)
 
             delay(intervalMs)
 
@@ -302,7 +317,7 @@ class MockLocationService : LifecycleService() {
         return Pair(segmentDistances.lastIndex, segmentDistances.last())
     }
 
-    private fun setMockLocation(point: TrackPoint, bearing: Float) {
+    private fun setMockLocation(point: TrackPoint, bearing: Float, speed: Float = speedMultiplier) {
         try {
             val location = Location(PROVIDER).apply {
                 latitude = point.latitude
@@ -310,7 +325,7 @@ class MockLocationService : LifecycleService() {
                 point.elevation?.let { altitude = it }
                 accuracy = 3.0f
                 this.bearing = bearing
-                speed = speedMultiplier
+                this.speed = speed
                 time = System.currentTimeMillis()
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             }

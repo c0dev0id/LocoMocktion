@@ -218,6 +218,9 @@ private fun PortraitContent(
         SpeedControlCard(
             speedKmh = uiState.speedKmh,
             onSpeedChange = viewModel::setSpeed,
+            hasGpxSpeed = uiState.track?.hasSpeedData == true,
+            useGpxSpeed = uiState.useGpxSpeed,
+            onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
         )
         UpdateRateCard(
             intervalMs = uiState.updateIntervalMs,
@@ -317,6 +320,9 @@ private fun LandscapeContent(
                 SpeedControlCard(
                     speedKmh = uiState.speedKmh,
                     onSpeedChange = viewModel::setSpeed,
+                    hasGpxSpeed = uiState.track?.hasSpeedData == true,
+                    useGpxSpeed = uiState.useGpxSpeed,
+                    onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
                 )
 
                 Row(
@@ -1341,6 +1347,9 @@ private fun TravelModeCard(
 private fun SpeedControlCard(
     speedKmh: Float,
     onSpeedChange: (Float) -> Unit,
+    hasGpxSpeed: Boolean = false,
+    useGpxSpeed: Boolean = false,
+    onUseGpxSpeedChange: (Boolean) -> Unit = {},
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1355,31 +1364,59 @@ private fun SpeedControlCard(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "%.0f km/h".format(speedKmh),
+                    text = if (useGpxSpeed && hasGpxSpeed) "GPX speed" else "%.0f km/h".format(speedKmh),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                 )
             }
-            Spacer(modifier = Modifier.height(8.dp))
 
-            Slider(
-                value = speedKmh,
-                onValueChange = onSpeedChange,
-                valueRange = 1f..400f,
-                steps = 0,
-            )
+            if (hasGpxSpeed) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Use GPX speed data",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "Speed recorded in the GPX file",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = useGpxSpeed,
+                        onCheckedChange = onUseGpxSpeedChange,
+                    )
+                }
+            }
 
-            // Preset speed buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                SpeedPreset("Walk\n5", 5f, onSpeedChange, Modifier.weight(1f))
-                SpeedPreset("Bike\n20", 20f, onSpeedChange, Modifier.weight(1f))
-                SpeedPreset("Car\n50", 50f, onSpeedChange, Modifier.weight(1f))
-                SpeedPreset("Fast\n120", 120f, onSpeedChange, Modifier.weight(1f))
-                SpeedPreset("Rocket\n400", 400f, onSpeedChange, Modifier.weight(1f))
+            if (!useGpxSpeed || !hasGpxSpeed) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Slider(
+                    value = speedKmh,
+                    onValueChange = onSpeedChange,
+                    valueRange = 1f..400f,
+                    steps = 0,
+                )
+
+                // Preset speed buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SpeedPreset("Walk\n5", 5f, onSpeedChange, Modifier.weight(1f))
+                    SpeedPreset("Bike\n20", 20f, onSpeedChange, Modifier.weight(1f))
+                    SpeedPreset("Car\n50", 50f, onSpeedChange, Modifier.weight(1f))
+                    SpeedPreset("Fast\n120", 120f, onSpeedChange, Modifier.weight(1f))
+                    SpeedPreset("Rocket\n400", 400f, onSpeedChange, Modifier.weight(1f))
+                }
             }
         }
     }
