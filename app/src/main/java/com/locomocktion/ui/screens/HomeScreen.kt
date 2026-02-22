@@ -1306,7 +1306,7 @@ private fun SpeedControlCard(
             Slider(
                 value = speedKmh,
                 onValueChange = onSpeedChange,
-                valueRange = 1f..200f,
+                valueRange = 1f..400f,
                 steps = 0,
             )
 
@@ -1319,6 +1319,7 @@ private fun SpeedControlCard(
                 SpeedPreset("Bike\n20", 20f, onSpeedChange, Modifier.weight(1f))
                 SpeedPreset("Car\n50", 50f, onSpeedChange, Modifier.weight(1f))
                 SpeedPreset("Fast\n120", 120f, onSpeedChange, Modifier.weight(1f))
+                SpeedPreset("Rocket\n400", 400f, onSpeedChange, Modifier.weight(1f))
             }
         }
     }
@@ -1348,10 +1349,9 @@ private fun SpeedPreset(
 private data class IntervalOption(val label: String, val ms: Long)
 
 private val intervalOptions = listOf(
-    IntervalOption("250ms", 250L),
-    IntervalOption("500ms", 500L),
-    IntervalOption("750ms", 750L),
-    IntervalOption("1s", 1000L),
+    IntervalOption("4HZ", 250L),
+    IntervalOption("2HZ", 500L),
+    IntervalOption("1HZ", 1000L),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1366,14 +1366,14 @@ private fun UpdateRateCard(
     Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(cardPadding)) {
             Text(
-                text = if (isCompact) "Rate" else "Update Rate",
+                text = "GPS Update Rate",
                 style = if (isCompact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
             if (!isCompact) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Faster rates give smoother movement",
+                    text = "Most devices run at 1HZ",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1391,7 +1391,7 @@ private fun UpdateRateCard(
                         ),
                     ) {
                         Text(
-                            if (isCompact) option.label.replace("ms", "") else option.label,
+                            option.label,
                             style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelLarge,
                         )
                     }

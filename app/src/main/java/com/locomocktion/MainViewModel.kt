@@ -10,7 +10,6 @@ import com.locomocktion.gpx.GpxTrack
 import com.locomocktion.gpx.TrackPoint
 import com.locomocktion.gpx.distanceBetween
 import com.locomocktion.gpx.parseGpx
-import com.locomocktion.gpx.simplifyTrack
 import com.locomocktion.service.MockLocationService
 import com.locomocktion.service.TravelMode
 import kotlinx.coroutines.Dispatchers
@@ -19,8 +18,6 @@ import kotlinx.coroutines.launch
 
 data class UiState(
     val track: GpxTrack? = null,
-    val rawPoints: List<TrackPoint>? = null,
-    val rawTotalDistanceMeters: Double = 0.0,
     val fileName: String? = null,
     val speedKmh: Float = 20f,
     val updateIntervalMs: Long = 1000L,
@@ -117,43 +114,39 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(showTrackSelector = false) }
     }
 
-    private fun applyTrack(
-        raw: GpxTrack,
-        trackIndex: Int,
-        uri: Uri?,
-        displayName: String?,
-        allTracks: List<GpxTrack>,
-    ) {
-        val simplified = raw.copy(points = simplifyTrack(raw.points))
-        if (simplified.points.isEmpty()) {
-            _uiState.update { it.copy(isLoading = false, error = "Track contains no points") }
-            return
-        }
-        val rawTotal = raw.points.zipWithNext { a, b -> distanceBetween(a, b) }.sum()
-        val name = displayName ?: raw.name ?: "Unknown"
-        _uiState.update {
-            it.copy(
-                track = simplified,
-                rawPoints = raw.points,
-                rawTotalDistanceMeters = rawTotal,
-                fileName = name,
-                startKm = 0f,
-                endKm = (simplified.totalDistanceMeters / 1000).toFloat(),
-                error = null,
-                isLoading = false,
-                availableTracks = allTracks,
-                pendingUri = uri?.toString(),
-                pendingDisplayName = displayName,
-            )
-        }
-        if (uri != null) {
-            prefs.edit()
-                .putString("last_gpx_uri", uri.toString())
-                .putString("last_gpx_name", name)
-                .putInt("last_gpx_track_index", trackIndex)
-                .apply()
-        }
-    }
+   private fun applyTrack(
+       raw: GpxTrack,
+       trackIndex: Int,
+       uri: Uri?,
+       displayName: String?,
+       allTracks: List<GpxTrack>,
+   ) {
+       if (raw.points.isEmpty()) {
+           _uiState.update { it.copy(isLoading = false, error = "Track contains no points") }
+           return
+       }
+       val name = displayName ?: raw.name ?: "Unknown"
+       _uiState.update {
+           it.copy(
+               track = raw,
+               fileName = name,
+               startKm = 0f,
+               endKm = (raw.totalDistanceMeters / 1000).toFloat(),
+               error = null,
+               isLoading = false,
+               availableTracks = allTracks,
+               pendingUri = uri?.toString(),
+               pendingDisplayName = displayName,
+           )
+       }
+       if (uri != null) {
+           prefs.edit()
+               .putString("last_gpx_uri", uri.toString())
+               .putString("last_gpx_name", name)
+               .putInt("last_gpx_track_index", trackIndex)
+               .apply()
+       }
+   }
 
     fun setSpeed(kmh: Float) {
         _uiState.update { it.copy(speedKmh = kmh) }
@@ -181,26 +174,22 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(travelMode = mode) }
     }
 
-    fun startMocking() {
-        val state = _uiState.value
-        val track = state.track ?: return
-        val points = state.rawPoints ?: track.points
-        // Scale km offsets from simplified track distance to raw track distance
-        val simplifiedTotal = track.totalDistanceMeters
-        val rawTotal = state.rawTotalDistanceMeters
-        val ratio = if (simplifiedTotal > 0) rawTotal / simplifiedTotal else 1.0
-        MockLocationService.configure(
-            points = points,
-            speed = state.speedKmh / 3.6f,
-            intervalMs = state.updateIntervalMs,
-            offsetMeters = (state.startKm * 1000).toDouble() * ratio,
-            endOffsetMeters = (state.endKm * 1000).toDouble() * ratio,
-            travelMode = state.travelMode,
-        )
+   fun startMocking() {
+       val state = _uiState.value
+       val track = state.track ?: return
+       
+       MockLocationService.configure(
+           points = track.points,
+           speed = state.speedKmh / 3.6f,
+           intervalMs = state.updateIntervalMs,
+           offsetMeters = (state.startKm * 1000).toDouble(),
+           endOffsetMeters = (state.endKm * 1000).toDouble(),
+           travelMode = state.travelMode,
+       )
 
-        val intent = Intent(app, MockLocationService::class.java)
-        app.startForegroundService(intent)
-    }
+       val intent = Intent(app, MockLocationService::class.java)
+       app.startForegroundService(intent)
+   }
 
     fun stopMocking() {
         val intent = Intent(app, MockLocationService::class.java).apply { action = "STOP" }
