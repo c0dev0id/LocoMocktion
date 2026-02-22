@@ -34,6 +34,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -55,6 +56,7 @@ fun HomeScreen(viewModel: MainViewModel) {
     val currentPoint by viewModel.currentPoint.collectAsState()
     val distanceTraveled by viewModel.distanceTraveled.collectAsState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -120,6 +122,11 @@ fun HomeScreen(viewModel: MainViewModel) {
             if (!isLandscape) {
                 TopAppBar(
                     title = { Text("LocoMocktion") },
+                    actions = {
+                        IconButton(onClick = { uriHandler.openUri("https://buymeacoffee.com/codevoid") }) {
+                            Text("☕", fontSize = 18.sp)
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
                         titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
