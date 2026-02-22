@@ -45,6 +45,18 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("locomocktion", Context.MODE_PRIVATE)
 
     init {
+        // Restore persisted settings before loading the track
+        val savedSpeed = prefs.getFloat("speed_kmh", 20f)
+        val savedInterval = prefs.getLong("update_interval_ms", 1000L)
+        val savedMode = try {
+            TravelMode.valueOf(prefs.getString("travel_mode", TravelMode.Normal.name)!!)
+        } catch (e: IllegalArgumentException) {
+            TravelMode.Normal
+        }
+        _uiState.update {
+            it.copy(speedKmh = savedSpeed, updateIntervalMs = savedInterval, travelMode = savedMode)
+        }
+
         val lastUri = prefs.getString("last_gpx_uri", null)
         val lastName = prefs.getString("last_gpx_name", null)
         val lastTrackIndex = prefs.getInt("last_gpx_track_index", -1)
@@ -126,12 +138,21 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
            return
        }
        val name = displayName ?: raw.name ?: "Unknown"
+       val maxKm = (raw.totalDistanceMeters / 1000).toFloat()
+
+       // Restore saved start/end positions when loading the same track
+       val savedUri = prefs.getString("last_gpx_uri", null)
+       val savedTrackIndex = prefs.getInt("last_gpx_track_index", -1)
+       val isSameTrack = uri?.toString() == savedUri && trackIndex == savedTrackIndex
+       val startKm = if (isSameTrack) prefs.getFloat("start_km", 0f).coerceIn(0f, maxKm) else 0f
+       val endKm = if (isSameTrack) prefs.getFloat("end_km", maxKm).coerceIn(0f, maxKm) else maxKm
+
        _uiState.update {
            it.copy(
                track = raw,
                fileName = name,
-               startKm = 0f,
-               endKm = (raw.totalDistanceMeters / 1000).toFloat(),
+               startKm = startKm,
+               endKm = endKm,
                error = null,
                isLoading = false,
                availableTracks = allTracks,
@@ -151,27 +172,34 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setSpeed(kmh: Float) {
         _uiState.update { it.copy(speedKmh = kmh) }
         MockLocationService.updateSpeed(kmh / 3.6f)
+        prefs.edit().putFloat("speed_kmh", kmh).apply()
     }
 
     fun setUpdateInterval(ms: Long) {
         _uiState.update { it.copy(updateIntervalMs = ms) }
         MockLocationService.updateInterval(ms)
+        prefs.edit().putLong("update_interval_ms", ms).apply()
     }
 
     fun setStartKm(km: Float) {
         val track = _uiState.value.track ?: return
         val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        _uiState.update { it.copy(startKm = km.coerceIn(0f, maxKm)) }
+        val clamped = km.coerceIn(0f, maxKm)
+        _uiState.update { it.copy(startKm = clamped) }
+        prefs.edit().putFloat("start_km", clamped).apply()
     }
 
     fun setEndKm(km: Float) {
         val track = _uiState.value.track ?: return
         val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        _uiState.update { it.copy(endKm = km.coerceIn(0f, maxKm)) }
+        val clamped = km.coerceIn(0f, maxKm)
+        _uiState.update { it.copy(endKm = clamped) }
+        prefs.edit().putFloat("end_km", clamped).apply()
     }
 
     fun setTravelMode(mode: TravelMode) {
         _uiState.update { it.copy(travelMode = mode) }
+        prefs.edit().putString("travel_mode", mode.name).apply()
     }
 
    fun startMocking() {
