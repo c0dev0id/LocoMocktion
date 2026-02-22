@@ -119,20 +119,18 @@ fun HomeScreen(viewModel: MainViewModel) {
 
     Scaffold(
         topBar = {
-            if (!isLandscape) {
-                TopAppBar(
-                    title = { Text("LocoMocktion") },
-                    actions = {
-                        IconButton(onClick = { uriHandler.openUri("https://buymeacoffee.com/codevoid") }) {
-                            Text("☕", fontSize = 18.sp)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    ),
-                )
-            }
+            TopAppBar(
+                title = { Text("LocoMocktion") },
+                actions = {
+                    IconButton(onClick = { uriHandler.openUri("https://buymeacoffee.com/codevoid") }) {
+                        Text("☕", fontSize = 18.sp)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
