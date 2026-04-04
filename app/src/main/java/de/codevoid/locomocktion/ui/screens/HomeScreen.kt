@@ -1627,7 +1627,7 @@ private fun TrackSelectionDialog(
         onDismissRequest = onDismiss,
         title = { Text("Select Track") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "This file contains ${tracks.size} tracks. Choose one to load:",
                     style = MaterialTheme.typography.bodyMedium,
