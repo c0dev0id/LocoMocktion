@@ -1413,10 +1413,15 @@ private fun SpeedControlCard(
             if (!useGpxSpeed || !hasGpxSpeed) {
                 Spacer(modifier = Modifier.height(8.dp))
 
+                val sliderMax = 140f
+                val customSliderPos = 135f
                 Slider(
-                    value = speedKmh,
-                    onValueChange = onSpeedChange,
-                    valueRange = 1f..9999f,
+                    value = if (customMode) customSliderPos else speedKmh.coerceIn(1f, sliderMax),
+                    onValueChange = { newValue ->
+                        if (customMode) customMode = false
+                        onSpeedChange(newValue)
+                    },
+                    valueRange = 1f..sliderMax,
                     steps = 0,
                 )
 
