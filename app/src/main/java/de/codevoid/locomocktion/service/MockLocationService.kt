@@ -36,30 +36,9 @@ class MockLocationService : LifecycleService() {
         private const val CHANNEL_ID = "mock_location_channel"
         private const val NOTIFICATION_ID = 1
 
-        // Mock both GPS and network so Google Play Services' FusedLocationProvider,
-        // which fuses data from multiple sources, does not periodically override the
-        // mock with real network-based fixes.
-        private data class MockProvider(
-            val name: String,
-            val accuracyMeters: Float,
-            val powerUsage: Int,
-            val accuracy: Int,
-        )
-
-        private val MOCK_PROVIDERS = listOf(
-            MockProvider(
-                LocationManager.GPS_PROVIDER,
-                accuracyMeters = 3.0f,
-                powerUsage = ProviderProperties.POWER_USAGE_LOW,
-                accuracy = ProviderProperties.ACCURACY_FINE,
-            ),
-            MockProvider(
-                LocationManager.NETWORK_PROVIDER,
-                accuracyMeters = 10.0f,
-                powerUsage = ProviderProperties.POWER_USAGE_MEDIUM,
-                accuracy = ProviderProperties.ACCURACY_COARSE,
-            ),
-        )
+        // PASSIVE_PROVIDER cannot be registered as a test provider — it reflects
+        // other providers automatically, so it receives mock data for free.
+        private val PASSIVE = LocationManager.PASSIVE_PROVIDER
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
@@ -115,6 +94,8 @@ class MockLocationService : LifecycleService() {
 
     private var mockJob: Job? = null
     private lateinit var locationManager: LocationManager
+    // Providers successfully registered as test providers for this session.
+    private var activeMockProviders: List<String> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
@@ -161,25 +142,36 @@ class MockLocationService : LifecycleService() {
     private fun startMocking() {
         if (mockJob?.isActive == true) return
 
+        // Discover all providers at runtime and mock every non-passive one.
+        // This covers GPS, network, fused (API 31+), and any OEM-specific providers,
+        // preventing navigation apps from falling back to a real unmocked provider.
+        val candidates = locationManager.allProviders.filter { it != PASSIVE }
+        val succeeded = mutableListOf<String>()
         try {
-            for (provider in MOCK_PROVIDERS) {
+            for (name in candidates) {
+                try { locationManager.removeTestProvider(name) } catch (_: Exception) {}
                 try {
-                    locationManager.removeTestProvider(provider.name)
+                    locationManager.addTestProvider(
+                        name,
+                        false, false, false, false, true, true, true,
+                        ProviderProperties.POWER_USAGE_LOW,
+                        ProviderProperties.ACCURACY_FINE,
+                    )
+                    locationManager.setTestProviderEnabled(name, true)
+                    succeeded.add(name)
                 } catch (_: Exception) {}
-
-                locationManager.addTestProvider(
-                    provider.name,
-                    false, false, false, false, true, true, true,
-                    provider.powerUsage,
-                    provider.accuracy,
-                )
-                locationManager.setTestProviderEnabled(provider.name, true)
             }
         } catch (e: SecurityException) {
             stopSelf()
             return
         }
 
+        if (succeeded.isEmpty()) {
+            stopSelf()
+            return
+        }
+
+        activeMockProviders = succeeded
         _isRunning.value = true
 
         mockJob = lifecycleScope.launch(Dispatchers.Default) {
@@ -346,19 +338,19 @@ class MockLocationService : LifecycleService() {
     private fun setMockLocation(point: TrackPoint, bearing: Float, speed: Float = speedMultiplier) {
         val now = System.currentTimeMillis()
         val elapsed = SystemClock.elapsedRealtimeNanos()
-        for (provider in MOCK_PROVIDERS) {
+        for (name in activeMockProviders) {
             try {
-                val location = Location(provider.name).apply {
+                val location = Location(name).apply {
                     latitude = point.latitude
                     longitude = point.longitude
                     point.elevation?.let { altitude = it }
-                    accuracy = provider.accuracyMeters
+                    accuracy = 3.0f
                     this.bearing = bearing
                     this.speed = speed
                     time = now
                     elapsedRealtimeNanos = elapsed
                 }
-                locationManager.setTestProviderLocation(provider.name, location)
+                locationManager.setTestProviderLocation(name, location)
             } catch (_: Exception) {}
         }
     }
@@ -380,12 +372,13 @@ class MockLocationService : LifecycleService() {
         _progress.value = 0f
         _currentPoint.value = null
         _distanceTraveled.value = 0.0
-        for (provider in MOCK_PROVIDERS) {
+        for (name in activeMockProviders) {
             try {
-                locationManager.setTestProviderEnabled(provider.name, false)
-                locationManager.removeTestProvider(provider.name)
+                locationManager.setTestProviderEnabled(name, false)
+                locationManager.removeTestProvider(name)
             } catch (_: Exception) {}
         }
+        activeMockProviders = emptyList()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
