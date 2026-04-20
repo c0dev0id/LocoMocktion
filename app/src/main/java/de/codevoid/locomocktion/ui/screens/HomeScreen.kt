@@ -265,6 +265,8 @@ private fun PortraitContent(
         SpeedControlCard(
             speedKmh = uiState.speedKmh,
             onSpeedChange = viewModel::setSpeed,
+            customMode = uiState.customMode,
+            onCustomModeChange = viewModel::setCustomMode,
             hasGpxSpeed = uiState.track?.hasSpeedData == true,
             useGpxSpeed = uiState.useGpxSpeed,
             onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
@@ -372,6 +374,8 @@ private fun LandscapeContent(
                 SpeedControlCard(
                     speedKmh = uiState.speedKmh,
                     onSpeedChange = viewModel::setSpeed,
+                    customMode = uiState.customMode,
+                    onCustomModeChange = viewModel::setCustomMode,
                     hasGpxSpeed = uiState.track?.hasSpeedData == true,
                     useGpxSpeed = uiState.useGpxSpeed,
                     onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
@@ -1413,12 +1417,13 @@ private fun TravelModeCard(
 private fun SpeedControlCard(
     speedKmh: Float,
     onSpeedChange: (Float) -> Unit,
+    customMode: Boolean = false,
+    onCustomModeChange: (Boolean) -> Unit = {},
     hasGpxSpeed: Boolean = false,
     useGpxSpeed: Boolean = false,
     onUseGpxSpeedChange: (Boolean) -> Unit = {},
     unitSystem: UnitSystem = UnitSystem.Metric,
 ) {
-    var customMode by rememberSaveable { mutableStateOf(false) }
 
     // Slider + presets are defined in display units per unit system.
     val sliderMax = when (unitSystem) {
@@ -1445,11 +1450,14 @@ private fun SpeedControlCard(
         UnitSystem.Imperial -> 250
     }
     var customText by rememberSaveable(unitSystem) {
-        mutableStateOf(customDefaultDisplay.toString())
+        mutableStateOf(
+            if (customMode) kmhToDisplay(speedKmh, unitSystem).toInt().coerceIn(1, 9999).toString()
+            else customDefaultDisplay.toString()
+        )
     }
 
     val onPresetChange: (Float) -> Unit = { displayValue ->
-        customMode = false
+        onCustomModeChange(false)
         onSpeedChange(displayToKmh(displayValue, unitSystem))
     }
 
@@ -1509,7 +1517,7 @@ private fun SpeedControlCard(
                 Slider(
                     value = if (customMode) customSliderPos else sliderDisplayValue,
                     onValueChange = { newValue ->
-                        if (customMode) customMode = false
+                        if (customMode) onCustomModeChange(false)
                         onSpeedChange(displayToKmh(newValue, unitSystem))
                     },
                     valueRange = 1f..sliderMax,
@@ -1531,7 +1539,7 @@ private fun SpeedControlCard(
                     }
                     FilledTonalButton(
                         onClick = {
-                            customMode = true
+                            onCustomModeChange(true)
                             val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: customDefaultDisplay
                             customText = v.toString()
                             onSpeedChange(displayToKmh(v.toFloat(), unitSystem))

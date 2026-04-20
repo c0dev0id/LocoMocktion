@@ -28,6 +28,7 @@ data class UiState(
     val track: GpxTrack? = null,
     val fileName: String? = null,
     val speedKmh: Float = 20f,
+    val customMode: Boolean = false,
     val useGpxSpeed: Boolean = false,
     val updateIntervalMs: Long = 1000L,
     val startKm: Float = 0f,
@@ -70,6 +71,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     init {
         // Restore persisted settings before loading the track
         val savedSpeed = prefs.getFloat("speed_kmh", 20f)
+        val savedCustomMode = prefs.getBoolean("custom_mode", false)
         val savedInterval = prefs.getLong("update_interval_ms", 1000L)
         val savedMode = try {
             TravelMode.valueOf(prefs.getString("travel_mode", TravelMode.Normal.name)!!)
@@ -85,6 +87,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         _uiState.update {
             it.copy(
                 speedKmh = savedSpeed,
+                customMode = savedCustomMode,
                 updateIntervalMs = savedInterval,
                 travelMode = savedMode,
                 useGpxSpeed = savedUseGpxSpeed,
@@ -208,6 +211,11 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(speedKmh = kmh) }
         MockLocationService.updateSpeed(kmh / 3.6f)
         prefs.edit().putFloat("speed_kmh", kmh).apply()
+    }
+
+    fun setCustomMode(custom: Boolean) {
+        _uiState.update { it.copy(customMode = custom) }
+        prefs.edit().putBoolean("custom_mode", custom).apply()
     }
 
     fun setUseGpxSpeed(enabled: Boolean) {
