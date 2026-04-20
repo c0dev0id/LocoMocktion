@@ -56,22 +56,4 @@ suspend fun fetchLatestRelease(): ReleaseInfo = withContext(Dispatchers.IO) {
     }
 }
 
-fun isNewerVersion(latest: String, current: String): Boolean {
-    val l = parseVersion(latest)
-    val c = parseVersion(current)
-    val size = maxOf(l.size, c.size)
-    for (i in 0 until size) {
-        val a = l.getOrElse(i) { 0 }
-        val b = c.getOrElse(i) { 0 }
-        if (a != b) return a > b
-    }
-    return false
-}
-
-private fun parseVersion(raw: String): List<Int> {
-    val trimmed = raw.trim().removePrefix("v").removePrefix("V")
-    if (trimmed.isEmpty()) return emptyList()
-    return trimmed.split(".").map { part ->
-        part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
-    }
-}
+fun isNewerVersion(latestTag: String, currentTag: String): Boolean = latestTag != currentTag
