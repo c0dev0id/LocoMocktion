@@ -1356,6 +1356,14 @@ private fun SpeedControlCard(
     useGpxSpeed: Boolean = false,
     onUseGpxSpeedChange: (Boolean) -> Unit = {},
 ) {
+    var customMode by rememberSaveable { mutableStateOf(false) }
+    var customText by rememberSaveable { mutableStateOf("400") }
+
+    val onPresetChange: (Float) -> Unit = { value ->
+        customMode = false
+        onSpeedChange(value)
+    }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1407,7 +1415,7 @@ private fun SpeedControlCard(
                 Slider(
                     value = speedKmh,
                     onValueChange = onSpeedChange,
-                    valueRange = 1f..400f,
+                    valueRange = 1f..9999f,
                     steps = 0,
                 )
 
@@ -1416,11 +1424,54 @@ private fun SpeedControlCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SpeedPreset("Walk\n5", 5f, onSpeedChange, Modifier.weight(1f))
-                    SpeedPreset("Bike\n20", 20f, onSpeedChange, Modifier.weight(1f))
-                    SpeedPreset("Car\n50", 50f, onSpeedChange, Modifier.weight(1f))
-                    SpeedPreset("Fast\n120", 120f, onSpeedChange, Modifier.weight(1f))
-                    SpeedPreset("Rocket\n400", 400f, onSpeedChange, Modifier.weight(1f))
+                    SpeedPreset("Walk\n5", 5f, onPresetChange, Modifier.weight(1f))
+                    SpeedPreset("Bike\n20", 20f, onPresetChange, Modifier.weight(1f))
+                    SpeedPreset("Car\n50", 50f, onPresetChange, Modifier.weight(1f))
+                    SpeedPreset("Fast\n120", 120f, onPresetChange, Modifier.weight(1f))
+                    FilledTonalButton(
+                        onClick = {
+                            customMode = true
+                            val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: 400
+                            customText = v.toString()
+                            onSpeedChange(v.toFloat())
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(4.dp),
+                    ) {
+                        Text(
+                            text = "Custom",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                        )
+                    }
+                }
+
+                if (customMode) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = customText,
+                        onValueChange = { input ->
+                            val digits = input.filter { it.isDigit() }.take(4)
+                            customText = digits
+                            val parsed = digits.toIntOrNull()
+                            if (parsed != null && parsed in 1..9999) {
+                                onSpeedChange(parsed.toFloat())
+                            }
+                        },
+                        label = { Text("Custom speed (km/h)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                if (!state.isFocused) {
+                                    val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: 400
+                                    customText = v.toString()
+                                    onSpeedChange(v.toFloat())
+                                }
+                            },
+                    )
                 }
             }
         }
