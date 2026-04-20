@@ -41,11 +41,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import de.codevoid.locomocktion.BuildConfig
 import de.codevoid.locomocktion.MainViewModel
+import de.codevoid.locomocktion.UpdateState
 import de.codevoid.locomocktion.gpx.GpxTrack
 import de.codevoid.locomocktion.gpx.TrackPoint
 import de.codevoid.locomocktion.gpx.distanceBetween
 import de.codevoid.locomocktion.service.TravelMode
+import de.codevoid.locomocktion.ui.UnitSystem
+import de.codevoid.locomocktion.ui.displayToKm
+import de.codevoid.locomocktion.ui.displayToKmh
+import de.codevoid.locomocktion.ui.distanceUnitLabel
+import de.codevoid.locomocktion.ui.formatDistanceKm
+import de.codevoid.locomocktion.ui.kmToDisplay
+import de.codevoid.locomocktion.ui.kmhToDisplay
+import de.codevoid.locomocktion.ui.speedUnitLabel
+import de.codevoid.locomocktion.updater.ReleaseInfo
+import de.codevoid.locomocktion.updater.launchInstaller
 import de.codevoid.locomocktion.util.isMockLocationEnabled
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,6 +92,8 @@ fun HomeScreen(viewModel: MainViewModel) {
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showMockLocationDialog by remember { mutableStateOf(false) }
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    val updateState by viewModel.updateState.collectAsState()
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     LaunchedEffect(uiState.error) {
@@ -103,10 +117,28 @@ fun HomeScreen(viewModel: MainViewModel) {
         uiState.availableTracks?.let { tracks ->
             TrackSelectionDialog(
                 tracks = tracks,
+                unitSystem = uiState.unitSystem,
                 onSelect = viewModel::selectTrack,
                 onDismiss = viewModel::dismissTrackSelection,
             )
         }
+    }
+
+    if (settingsOpen) {
+        SettingsDialog(
+            unitSystem = uiState.unitSystem,
+            onUnitSystemChange = viewModel::setUnitSystem,
+            onCheckUpdate = viewModel::checkForUpdate,
+            onDismiss = { settingsOpen = false },
+        )
+    }
+
+    if (updateState !is UpdateState.Idle) {
+        UpdateDialog(
+            state = updateState,
+            onDownload = viewModel::startDownload,
+            onDismiss = viewModel::dismissUpdate,
+        )
     }
 
     val onPickFile = { filePicker.launch(arrayOf("application/*", "*/*")) }
@@ -125,6 +157,12 @@ fun HomeScreen(viewModel: MainViewModel) {
                 actions = {
                     IconButton(onClick = { uriHandler.openUri("https://buymeacoffee.com/codevoid") }) {
                         Text("☕", fontSize = 18.sp)
+                    }
+                    IconButton(onClick = { settingsOpen = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -195,6 +233,7 @@ private fun PortraitContent(
             onPickFile = onPickFile,
             hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
             onSelectTrack = viewModel::showTrackSelection,
+            unitSystem = uiState.unitSystem,
         )
 
         TrackPreviewCard(
@@ -206,6 +245,7 @@ private fun PortraitContent(
             onEndChange = viewModel::setEndKm,
             isRunning = isRunning,
             isLoading = uiState.isLoading,
+            unitSystem = uiState.unitSystem,
         )
         TrackRangeCard(
             startKm = uiState.startKm,
@@ -214,6 +254,7 @@ private fun PortraitContent(
             onStartChange = viewModel::setStartKm,
             onEndChange = viewModel::setEndKm,
             isRunning = isRunning || uiState.track == null,
+            unitSystem = uiState.unitSystem,
         )
         TravelModeCard(
             travelMode = uiState.travelMode,
@@ -227,6 +268,7 @@ private fun PortraitContent(
             hasGpxSpeed = uiState.track?.hasSpeedData == true,
             useGpxSpeed = uiState.useGpxSpeed,
             onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
+            unitSystem = uiState.unitSystem,
         )
         UpdateRateCard(
             intervalMs = uiState.updateIntervalMs,
@@ -238,6 +280,7 @@ private fun PortraitContent(
                 progress = progress,
                 currentPoint = currentPoint,
                 distanceTraveledMeters = distanceTraveled,
+                unitSystem = uiState.unitSystem,
             )
         }
 
@@ -282,6 +325,7 @@ private fun LandscapeContent(
                 onPickFile = onPickFile,
                 hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
                 onSelectTrack = viewModel::showTrackSelection,
+                unitSystem = uiState.unitSystem,
                 isCompact = true,
             )
 
@@ -294,6 +338,7 @@ private fun LandscapeContent(
                 onEndChange = viewModel::setEndKm,
                 isRunning = isRunning,
                 isLoading = uiState.isLoading,
+                unitSystem = uiState.unitSystem,
                 modifier = Modifier.weight(1f),
                 isCompact = true,
             )
@@ -305,6 +350,7 @@ private fun LandscapeContent(
                 onStartChange = viewModel::setStartKm,
                 onEndChange = viewModel::setEndKm,
                 isRunning = isRunning || uiState.track == null,
+                unitSystem = uiState.unitSystem,
                 isCompact = true,
             )
         }
@@ -329,6 +375,7 @@ private fun LandscapeContent(
                     hasGpxSpeed = uiState.track?.hasSpeedData == true,
                     useGpxSpeed = uiState.useGpxSpeed,
                     onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
+                    unitSystem = uiState.unitSystem,
                 )
 
                 Row(
@@ -355,6 +402,7 @@ private fun LandscapeContent(
                         progress = progress,
                         currentPoint = currentPoint,
                         distanceTraveledMeters = distanceTraveled,
+                        unitSystem = uiState.unitSystem,
                     )
                 }
             }
@@ -378,6 +426,7 @@ private fun FileSelectionCard(
     onPickFile: () -> Unit,
     hasMultipleTracks: Boolean = false,
     onSelectTrack: () -> Unit = {},
+    unitSystem: UnitSystem = UnitSystem.Metric,
     isCompact: Boolean = false,
 ) {
     if (isCompact) {
@@ -407,7 +456,7 @@ private fun FileSelectionCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "${track.points.size} pts · ${"%.1f".format(track.totalDistanceMeters / 1000)} km",
+                            text = "${track.points.size} pts · ${formatDistanceKm(track.totalDistanceMeters / 1000.0, unitSystem, decimals = 1)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -462,7 +511,7 @@ private fun FileSelectionCard(
                             Text(text = fileName, style = MaterialTheme.typography.bodyLarge)
                             Text(
                                 text = "${track.points.size} points · " +
-                                        "%.2f km".format(track.totalDistanceMeters / 1000),
+                                        formatDistanceKm(track.totalDistanceMeters / 1000.0, unitSystem),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -510,6 +559,7 @@ private fun TrackPreviewCard(
     onEndChange: (Float) -> Unit,
     isRunning: Boolean,
     isLoading: Boolean = false,
+    unitSystem: UnitSystem = UnitSystem.Metric,
     modifier: Modifier = Modifier,
     isCompact: Boolean = false,
 ) {
@@ -1045,7 +1095,7 @@ private fun TrackPreviewCard(
 
                         // Distance label at midpoint of active range
                         val midPt = toOffset(positionAtMeters(lowMeters + rangeMeters * 0.5))
-                        val distLabel = "%.1f km".format(rangeMeters / 1000.0)
+                        val distLabel = formatDistanceKm(rangeMeters / 1000.0, unitSystem, decimals = 1)
                         val distPaint = android.graphics.Paint().apply {
                             color = 0xFF333333.toInt()
                             textSize = 9.sp.toPx()
@@ -1127,8 +1177,8 @@ private fun TrackPreviewCard(
                     // --- Km labels using native canvas ---
                     val nativeCanvas = drawContext.canvas.nativeCanvas
                     val textSizePx = 10.sp.toPx()
-                    val startLabel = "%.1f km".format(startKm)
-                    val endLabel = "%.1f km".format(endKm)
+                    val startLabel = formatDistanceKm(startKm.toDouble(), unitSystem, decimals = 1)
+                    val endLabel = formatDistanceKm(endKm.toDouble(), unitSystem, decimals = 1)
 
                     val startLabelPaint = android.graphics.Paint().apply {
                         color = 0xFF2E7D32.toInt()
@@ -1217,18 +1267,26 @@ private fun TrackRangeCard(
     onStartChange: (Float) -> Unit,
     onEndChange: (Float) -> Unit,
     isRunning: Boolean,
+    unitSystem: UnitSystem = UnitSystem.Metric,
     isCompact: Boolean = false,
 ) {
-    var startText by remember { mutableStateOf(if (startKm == 0f) "" else "%.2f".format(startKm)) }
-    var endText by remember { mutableStateOf("%.2f".format(endKm)) }
+    fun formatField(km: Float): String {
+        val display = kmToDisplay(km, unitSystem)
+        return if (km == 0f) "" else "%.2f".format(display)
+    }
+
+    var startText by remember { mutableStateOf(formatField(startKm)) }
+    var endText by remember {
+        mutableStateOf("%.2f".format(kmToDisplay(endKm, unitSystem)))
+    }
     var startFocused by remember { mutableStateOf(false) }
     var endFocused by remember { mutableStateOf(false) }
 
-    LaunchedEffect(startKm) {
-        if (!startFocused) startText = if (startKm == 0f) "" else "%.2f".format(startKm)
+    LaunchedEffect(startKm, unitSystem) {
+        if (!startFocused) startText = formatField(startKm)
     }
-    LaunchedEffect(endKm) {
-        if (!endFocused) endText = "%.2f".format(endKm)
+    LaunchedEffect(endKm, unitSystem) {
+        if (!endFocused) endText = "%.2f".format(kmToDisplay(endKm, unitSystem))
     }
 
     val cardPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 4.dp) else PaddingValues(16.dp)
@@ -1243,12 +1301,14 @@ private fun TrackRangeCard(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Track total: %.2f km".format(totalDistanceKm),
+                    text = "Track total: ${formatDistanceKm(totalDistanceKm, unitSystem)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
+
+            val distLabel = distanceUnitLabel(unitSystem)
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1260,10 +1320,10 @@ private fun TrackRangeCard(
                     onValueChange = { input ->
                         startText = input
                         val parsed = input.toFloatOrNull()
-                        if (parsed != null) onStartChange(parsed)
+                        if (parsed != null) onStartChange(displayToKm(parsed, unitSystem))
                         else if (input.isEmpty()) onStartChange(0f)
                     },
-                    label = { Text("Start km") },
+                    label = { Text("Start $distLabel") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     enabled = !isRunning,
@@ -1272,7 +1332,7 @@ private fun TrackRangeCard(
                         .onFocusChanged { state ->
                             startFocused = state.isFocused
                             if (!state.isFocused) {
-                                startText = if (startKm == 0f) "" else "%.2f".format(startKm)
+                                startText = formatField(startKm)
                             }
                         },
                 )
@@ -1281,10 +1341,10 @@ private fun TrackRangeCard(
                     onValueChange = { input ->
                         endText = input
                         val parsed = input.toFloatOrNull()
-                        if (parsed != null) onEndChange(parsed)
+                        if (parsed != null) onEndChange(displayToKm(parsed, unitSystem))
                         else if (input.isEmpty()) onEndChange(totalDistanceKm.toFloat())
                     },
-                    label = { Text("End km") },
+                    label = { Text("End $distLabel") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     enabled = !isRunning,
@@ -1293,7 +1353,7 @@ private fun TrackRangeCard(
                         .onFocusChanged { state ->
                             endFocused = state.isFocused
                             if (!state.isFocused) {
-                                endText = "%.2f".format(endKm)
+                                endText = "%.2f".format(kmToDisplay(endKm, unitSystem))
                             }
                         },
                 )
@@ -1356,13 +1416,41 @@ private fun SpeedControlCard(
     hasGpxSpeed: Boolean = false,
     useGpxSpeed: Boolean = false,
     onUseGpxSpeedChange: (Boolean) -> Unit = {},
+    unitSystem: UnitSystem = UnitSystem.Metric,
 ) {
     var customMode by rememberSaveable { mutableStateOf(false) }
-    var customText by rememberSaveable { mutableStateOf("400") }
 
-    val onPresetChange: (Float) -> Unit = { value ->
+    // Slider + presets are defined in display units per unit system.
+    val sliderMax = when (unitSystem) {
+        UnitSystem.Metric -> 150f
+        UnitSystem.Imperial -> 90f
+    }
+    val customSliderPos = sliderMax - 5f
+    val presets = when (unitSystem) {
+        UnitSystem.Metric -> listOf(
+            "Walk" to 5f,
+            "Bike" to 20f,
+            "Car" to 50f,
+            "Fast" to 120f,
+        )
+        UnitSystem.Imperial -> listOf(
+            "Walk" to 3f,
+            "Bike" to 12f,
+            "Car" to 30f,
+            "Fast" to 75f,
+        )
+    }
+    val customDefaultDisplay = when (unitSystem) {
+        UnitSystem.Metric -> 400
+        UnitSystem.Imperial -> 250
+    }
+    var customText by rememberSaveable(unitSystem) {
+        mutableStateOf(customDefaultDisplay.toString())
+    }
+
+    val onPresetChange: (Float) -> Unit = { displayValue ->
         customMode = false
-        onSpeedChange(value)
+        onSpeedChange(displayToKmh(displayValue, unitSystem))
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -1378,7 +1466,11 @@ private fun SpeedControlCard(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = if (useGpxSpeed && hasGpxSpeed) "GPX speed" else "%.0f km/h".format(speedKmh),
+                    text = if (useGpxSpeed && hasGpxSpeed) {
+                        "GPX speed"
+                    } else {
+                        "%.0f %s".format(kmhToDisplay(speedKmh, unitSystem), speedUnitLabel(unitSystem))
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
@@ -1413,13 +1505,12 @@ private fun SpeedControlCard(
             if (!useGpxSpeed || !hasGpxSpeed) {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val sliderMax = 140f
-                val customSliderPos = 135f
+                val sliderDisplayValue = kmhToDisplay(speedKmh, unitSystem).coerceIn(1f, sliderMax)
                 Slider(
-                    value = if (customMode) customSliderPos else speedKmh.coerceIn(1f, sliderMax),
+                    value = if (customMode) customSliderPos else sliderDisplayValue,
                     onValueChange = { newValue ->
                         if (customMode) customMode = false
-                        onSpeedChange(newValue)
+                        onSpeedChange(displayToKmh(newValue, unitSystem))
                     },
                     valueRange = 1f..sliderMax,
                     steps = 0,
@@ -1430,16 +1521,20 @@ private fun SpeedControlCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SpeedPreset("Walk\n5", 5f, onPresetChange, Modifier.weight(1f))
-                    SpeedPreset("Bike\n20", 20f, onPresetChange, Modifier.weight(1f))
-                    SpeedPreset("Car\n50", 50f, onPresetChange, Modifier.weight(1f))
-                    SpeedPreset("Fast\n120", 120f, onPresetChange, Modifier.weight(1f))
+                    presets.forEach { (label, value) ->
+                        SpeedPreset(
+                            label = "$label\n${value.toInt()}",
+                            displayValue = value,
+                            onSpeedChange = onPresetChange,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                     FilledTonalButton(
                         onClick = {
                             customMode = true
-                            val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: 400
+                            val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: customDefaultDisplay
                             customText = v.toString()
-                            onSpeedChange(v.toFloat())
+                            onSpeedChange(displayToKmh(v.toFloat(), unitSystem))
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp),
@@ -1462,19 +1557,19 @@ private fun SpeedControlCard(
                             customText = digits
                             val parsed = digits.toIntOrNull()
                             if (parsed != null && parsed in 1..9999) {
-                                onSpeedChange(parsed.toFloat())
+                                onSpeedChange(displayToKmh(parsed.toFloat(), unitSystem))
                             }
                         },
-                        label = { Text("Custom speed (km/h)") },
+                        label = { Text("Custom speed (${speedUnitLabel(unitSystem)})") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
                             .onFocusChanged { state ->
                                 if (!state.isFocused) {
-                                    val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: 400
+                                    val v = customText.toIntOrNull()?.coerceIn(1, 9999) ?: customDefaultDisplay
                                     customText = v.toString()
-                                    onSpeedChange(v.toFloat())
+                                    onSpeedChange(displayToKmh(v.toFloat(), unitSystem))
                                 }
                             },
                     )
@@ -1487,12 +1582,12 @@ private fun SpeedControlCard(
 @Composable
 private fun SpeedPreset(
     label: String,
-    speed: Float,
+    displayValue: Float,
     onSpeedChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     FilledTonalButton(
-        onClick = { onSpeedChange(speed) },
+        onClick = { onSpeedChange(displayValue) },
         modifier = modifier,
         shape = RoundedCornerShape(8.dp),
         contentPadding = PaddingValues(4.dp),
@@ -1565,6 +1660,7 @@ private fun ProgressCard(
     progress: Float,
     currentPoint: TrackPoint?,
     distanceTraveledMeters: Double,
+    unitSystem: UnitSystem = UnitSystem.Metric,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1595,7 +1691,7 @@ private fun ProgressCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    text = "%.2f km traveled".format(distanceTraveledMeters / 1000),
+                    text = "${formatDistanceKm(distanceTraveledMeters / 1000.0, unitSystem)} traveled",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
@@ -1677,6 +1773,7 @@ private fun MockLocationPermissionDialog(
 @Composable
 private fun TrackSelectionDialog(
     tracks: List<GpxTrack>,
+    unitSystem: UnitSystem = UnitSystem.Metric,
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1716,7 +1813,7 @@ private fun TrackSelectionDialog(
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "${track.points.size} points · ${"%.1f".format(track.totalDistanceMeters / 1000)} km",
+                                    text = "${track.points.size} points · ${formatDistanceKm(track.totalDistanceMeters / 1000.0, unitSystem, decimals = 1)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1734,4 +1831,195 @@ private fun TrackSelectionDialog(
             }
         },
     )
+}
+
+@Composable
+private fun SettingsDialog(
+    unitSystem: UnitSystem,
+    onUnitSystemChange: (UnitSystem) -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Settings") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Units",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = unitSystem == UnitSystem.Metric,
+                            onClick = { onUnitSystemChange(UnitSystem.Metric) },
+                            label = { Text("Metric (km, km/h)") },
+                        )
+                        FilterChip(
+                            selected = unitSystem == UnitSystem.Imperial,
+                            onClick = { onUnitSystemChange(UnitSystem.Imperial) },
+                            label = { Text("Imperial (mi, mph)") },
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Updates",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Button(
+                        onClick = {
+                            onCheckUpdate()
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDownload,
+                            contentDescription = null,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Check for update")
+                    }
+                    Text(
+                        text = "Installed version: ${BuildConfig.VERSION_NAME}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+@Composable
+private fun UpdateDialog(
+    state: UpdateState,
+    onDownload: (ReleaseInfo) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(state) {
+        if (state is UpdateState.ReadyToInstall) {
+            launchInstaller(context, state.file)
+            onDismiss()
+        }
+    }
+
+    when (state) {
+        is UpdateState.Idle, is UpdateState.ReadyToInstall -> return
+        is UpdateState.Checking -> {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Checking for update") },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Contacting GitHub…")
+                    }
+                },
+                confirmButton = {},
+            )
+        }
+        is UpdateState.UpToDate -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("You're up to date") },
+                text = { Text("Installed version v${state.current} is the latest release.") },
+                confirmButton = {
+                    TextButton(onClick = onDismiss) { Text("OK") }
+                },
+            )
+        }
+        is UpdateState.Available -> {
+            val info = state.info
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = {
+                    Column {
+                        Text("Update available")
+                        Text(
+                            text = info.name.ifEmpty { info.tagName },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        Text(
+                            text = "Installed: v${BuildConfig.VERSION_NAME}  ·  Latest: ${info.tagName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = info.body.ifBlank { "No release notes." },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { onDownload(info) },
+                        enabled = !info.apkDownloadUrl.isNullOrEmpty(),
+                    ) {
+                        Text("Download & Install")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                },
+            )
+        }
+        is UpdateState.Downloading -> {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Downloading update") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LinearProgressIndicator(
+                            progress = { state.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            text = "${(state.progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                },
+                confirmButton = {},
+            )
+        }
+        is UpdateState.Error -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("Update check failed") },
+                text = {
+                    Text(
+                        text = state.message,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = onDismiss) { Text("OK") }
+                },
+            )
+        }
+    }
 }

@@ -12,9 +12,17 @@ import de.codevoid.locomocktion.gpx.distanceBetween
 import de.codevoid.locomocktion.gpx.parseGpx
 import de.codevoid.locomocktion.service.MockLocationService
 import de.codevoid.locomocktion.service.TravelMode
+import de.codevoid.locomocktion.ui.UnitSystem
+import de.codevoid.locomocktion.updater.ReleaseInfo
+import de.codevoid.locomocktion.updater.downloadApk
+import de.codevoid.locomocktion.updater.fetchLatestRelease
+import de.codevoid.locomocktion.updater.isNewerVersion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.IOException
+import java.net.UnknownHostException
 
 data class UiState(
     val track: GpxTrack? = null,
@@ -25,6 +33,7 @@ data class UiState(
     val startKm: Float = 0f,
     val endKm: Float = 0f,
     val travelMode: TravelMode = TravelMode.Normal,
+    val unitSystem: UnitSystem = UnitSystem.Metric,
     val error: String? = null,
     val isLoading: Boolean = false,
     val availableTracks: List<GpxTrack>? = null,
@@ -32,6 +41,16 @@ data class UiState(
     val pendingUri: String? = null,
     val pendingDisplayName: String? = null,
 )
+
+sealed interface UpdateState {
+    data object Idle : UpdateState
+    data object Checking : UpdateState
+    data class UpToDate(val current: String) : UpdateState
+    data class Available(val info: ReleaseInfo) : UpdateState
+    data class Downloading(val info: ReleaseInfo, val progress: Float) : UpdateState
+    data class ReadyToInstall(val file: File) : UpdateState
+    data class Error(val message: String) : UpdateState
+}
 
 class MainViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -45,6 +64,9 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences("locomocktion", Context.MODE_PRIVATE)
 
+    private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
+
     init {
         // Restore persisted settings before loading the track
         val savedSpeed = prefs.getFloat("speed_kmh", 20f)
@@ -55,8 +77,19 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
             TravelMode.Normal
         }
         val savedUseGpxSpeed = prefs.getBoolean("use_gpx_speed", false)
+        val savedUnits = try {
+            UnitSystem.valueOf(prefs.getString("unit_system", UnitSystem.Metric.name)!!)
+        } catch (e: IllegalArgumentException) {
+            UnitSystem.Metric
+        }
         _uiState.update {
-            it.copy(speedKmh = savedSpeed, updateIntervalMs = savedInterval, travelMode = savedMode, useGpxSpeed = savedUseGpxSpeed)
+            it.copy(
+                speedKmh = savedSpeed,
+                updateIntervalMs = savedInterval,
+                travelMode = savedMode,
+                useGpxSpeed = savedUseGpxSpeed,
+                unitSystem = savedUnits,
+            )
         }
 
         val lastUri = prefs.getString("last_gpx_uri", null)
@@ -208,6 +241,60 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setTravelMode(mode: TravelMode) {
         _uiState.update { it.copy(travelMode = mode) }
         prefs.edit().putString("travel_mode", mode.name).apply()
+    }
+
+    fun setUnitSystem(system: UnitSystem) {
+        _uiState.update { it.copy(unitSystem = system) }
+        prefs.edit().putString("unit_system", system.name).apply()
+    }
+
+    fun checkForUpdate() {
+        if (_updateState.value is UpdateState.Checking ||
+            _updateState.value is UpdateState.Downloading
+        ) return
+        _updateState.value = UpdateState.Checking
+        viewModelScope.launch {
+            try {
+                val release = fetchLatestRelease()
+                val current = BuildConfig.VERSION_NAME
+                _updateState.value = if (isNewerVersion(release.tagName, current)) {
+                    UpdateState.Available(release)
+                } else {
+                    UpdateState.UpToDate(current)
+                }
+            } catch (e: UnknownHostException) {
+                _updateState.value = UpdateState.Error("No internet connection")
+            } catch (e: IOException) {
+                _updateState.value = UpdateState.Error("Network error: ${e.message ?: "failed"}")
+            } catch (e: Exception) {
+                _updateState.value = UpdateState.Error(e.message ?: "Update check failed")
+            }
+        }
+    }
+
+    fun startDownload(info: ReleaseInfo) {
+        val url = info.apkDownloadUrl
+        if (url.isNullOrEmpty()) {
+            _updateState.value = UpdateState.Error("Release has no APK asset")
+            return
+        }
+        _updateState.value = UpdateState.Downloading(info, 0f)
+        viewModelScope.launch {
+            try {
+                val file = downloadApk(app, url) { progress ->
+                    _updateState.value = UpdateState.Downloading(info, progress)
+                }
+                _updateState.value = UpdateState.ReadyToInstall(file)
+            } catch (e: IOException) {
+                _updateState.value = UpdateState.Error("Download failed: ${e.message ?: "I/O error"}")
+            } catch (e: Exception) {
+                _updateState.value = UpdateState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+
+    fun dismissUpdate() {
+        _updateState.value = UpdateState.Idle
     }
 
    fun startMocking() {
