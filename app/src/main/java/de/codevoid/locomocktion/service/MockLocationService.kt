@@ -1,5 +1,6 @@
 package de.codevoid.locomocktion.service
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -16,6 +17,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import de.codevoid.locomocktion.MainActivity
 import de.codevoid.locomocktion.R
 import de.codevoid.locomocktion.gpx.TrackPoint
@@ -23,6 +26,7 @@ import de.codevoid.locomocktion.gpx.distanceBetween
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.tasks.await
 
 enum class TravelMode(val label: String, val description: String) {
     Normal("Normal", "Travel from Start to End, then stop"),
@@ -94,12 +98,14 @@ class MockLocationService : LifecycleService() {
 
     private var mockJob: Job? = null
     private lateinit var locationManager: LocationManager
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
     // Providers successfully registered as test providers for this session.
     private var activeMockProviders: List<String> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         createNotificationChannel()
     }
 
@@ -139,6 +145,7 @@ class MockLocationService : LifecycleService() {
         super.onDestroy()
     }
 
+    @SuppressLint("MissingPermission")
     private fun startMocking() {
         if (mockJob?.isActive == true) return
 
@@ -174,8 +181,16 @@ class MockLocationService : LifecycleService() {
         activeMockProviders = succeeded
         _isRunning.value = true
 
-        mockJob = lifecycleScope.launch(Dispatchers.Default) {
-            walkTrack()
+        mockJob = lifecycleScope.launch {
+            // Put FLP itself into mock mode so it stops duty-cycling GPS hardware.
+            // Without this, FLP drops and re-requests GPS every ~10 s, and the
+            // ~1 s gap leaks the real GPS position to any FLP listener (e.g. DMD2 Next).
+            try {
+                fusedLocationClient.setMockMode(true).await()
+            } catch (_: Exception) {
+                // Play Services unavailable — fall back to LocationManager-only mocking.
+            }
+            withContext(Dispatchers.Default) { walkTrack() }
             withContext(Dispatchers.Main) { stopMocking() }
         }
     }
@@ -335,12 +350,26 @@ class MockLocationService : LifecycleService() {
         return Pair(segmentDistances.lastIndex, segmentDistances.last())
     }
 
+    @SuppressLint("MissingPermission")
     private fun setMockLocation(point: TrackPoint, bearing: Float, speed: Float = speedMultiplier) {
         val now = System.currentTimeMillis()
         val elapsed = SystemClock.elapsedRealtimeNanos()
+        val location = Location(LocationManager.GPS_PROVIDER).apply {
+            latitude = point.latitude
+            longitude = point.longitude
+            point.elevation?.let { altitude = it }
+            accuracy = 3.0f
+            this.bearing = bearing
+            this.speed = speed
+            time = now
+            elapsedRealtimeNanos = elapsed
+        }
+        // Push directly into FLP — DMD2 Next receives this without any GPS cycling gaps.
+        fusedLocationClient.setMockLocation(location)
+        // Also push to individual LocationManager providers for non-FLP apps.
         for (name in activeMockProviders) {
             try {
-                val location = Location(name).apply {
+                locationManager.setTestProviderLocation(name, Location(name).apply {
                     latitude = point.latitude
                     longitude = point.longitude
                     point.elevation?.let { altitude = it }
@@ -349,8 +378,7 @@ class MockLocationService : LifecycleService() {
                     this.speed = speed
                     time = now
                     elapsedRealtimeNanos = elapsed
-                }
-                locationManager.setTestProviderLocation(name, location)
+                })
             } catch (_: Exception) {}
         }
     }
@@ -372,6 +400,7 @@ class MockLocationService : LifecycleService() {
         _progress.value = 0f
         _currentPoint.value = null
         _distanceTraveled.value = 0.0
+        fusedLocationClient.setMockMode(false)
         for (name in activeMockProviders) {
             try {
                 locationManager.setTestProviderEnabled(name, false)
