@@ -3,8 +3,6 @@ name: Build
 on:
   push:
     branches: [main, 'claude/**']
-  pull_request:
-    branches: [main, 'claude/**']
 
 jobs:
   build:
