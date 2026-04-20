@@ -35,7 +35,31 @@ class MockLocationService : LifecycleService() {
     companion object {
         private const val CHANNEL_ID = "mock_location_channel"
         private const val NOTIFICATION_ID = 1
-        private const val PROVIDER = LocationManager.GPS_PROVIDER
+
+        // Mock both GPS and network so Google Play Services' FusedLocationProvider,
+        // which fuses data from multiple sources, does not periodically override the
+        // mock with real network-based fixes.
+        private data class MockProvider(
+            val name: String,
+            val accuracyMeters: Float,
+            val powerUsage: Int,
+            val accuracy: Int,
+        )
+
+        private val MOCK_PROVIDERS = listOf(
+            MockProvider(
+                LocationManager.GPS_PROVIDER,
+                accuracyMeters = 3.0f,
+                powerUsage = ProviderProperties.POWER_USAGE_LOW,
+                accuracy = ProviderProperties.ACCURACY_FINE,
+            ),
+            MockProvider(
+                LocationManager.NETWORK_PROVIDER,
+                accuracyMeters = 10.0f,
+                powerUsage = ProviderProperties.POWER_USAGE_MEDIUM,
+                accuracy = ProviderProperties.ACCURACY_COARSE,
+            ),
+        )
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
@@ -138,17 +162,19 @@ class MockLocationService : LifecycleService() {
         if (mockJob?.isActive == true) return
 
         try {
-            try {
-                locationManager.removeTestProvider(PROVIDER)
-            } catch (_: Exception) {}
+            for (provider in MOCK_PROVIDERS) {
+                try {
+                    locationManager.removeTestProvider(provider.name)
+                } catch (_: Exception) {}
 
-            locationManager.addTestProvider(
-                PROVIDER,
-                false, false, false, false, true, true, true,
-                ProviderProperties.POWER_USAGE_LOW,
-                ProviderProperties.ACCURACY_FINE,
-            )
-            locationManager.setTestProviderEnabled(PROVIDER, true)
+                locationManager.addTestProvider(
+                    provider.name,
+                    false, false, false, false, true, true, true,
+                    provider.powerUsage,
+                    provider.accuracy,
+                )
+                locationManager.setTestProviderEnabled(provider.name, true)
+            }
         } catch (e: SecurityException) {
             stopSelf()
             return
@@ -318,19 +344,23 @@ class MockLocationService : LifecycleService() {
     }
 
     private fun setMockLocation(point: TrackPoint, bearing: Float, speed: Float = speedMultiplier) {
-        try {
-            val location = Location(PROVIDER).apply {
-                latitude = point.latitude
-                longitude = point.longitude
-                point.elevation?.let { altitude = it }
-                accuracy = 3.0f
-                this.bearing = bearing
-                this.speed = speed
-                time = System.currentTimeMillis()
-                elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-            }
-            locationManager.setTestProviderLocation(PROVIDER, location)
-        } catch (_: Exception) {}
+        val now = System.currentTimeMillis()
+        val elapsed = SystemClock.elapsedRealtimeNanos()
+        for (provider in MOCK_PROVIDERS) {
+            try {
+                val location = Location(provider.name).apply {
+                    latitude = point.latitude
+                    longitude = point.longitude
+                    point.elevation?.let { altitude = it }
+                    accuracy = provider.accuracyMeters
+                    this.bearing = bearing
+                    this.speed = speed
+                    time = now
+                    elapsedRealtimeNanos = elapsed
+                }
+                locationManager.setTestProviderLocation(provider.name, location)
+            } catch (_: Exception) {}
+        }
     }
 
     private fun bearing(from: TrackPoint, to: TrackPoint): Double {
@@ -350,10 +380,12 @@ class MockLocationService : LifecycleService() {
         _progress.value = 0f
         _currentPoint.value = null
         _distanceTraveled.value = 0.0
-        try {
-            locationManager.setTestProviderEnabled(PROVIDER, false)
-            locationManager.removeTestProvider(PROVIDER)
-        } catch (_: Exception) {}
+        for (provider in MOCK_PROVIDERS) {
+            try {
+                locationManager.setTestProviderEnabled(provider.name, false)
+                locationManager.removeTestProvider(provider.name)
+            } catch (_: Exception) {}
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
