@@ -226,52 +226,64 @@ private fun PortraitContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        FileSelectionCard(
-            fileName = uiState.fileName,
-            track = uiState.track,
+        FixedLocationCard(
+            enabled = uiState.useFixedLocation,
+            lat = uiState.fixedLat,
+            lon = uiState.fixedLon,
+            onEnabledChange = viewModel::setUseFixedLocation,
+            onLatChange = viewModel::setFixedLat,
+            onLonChange = viewModel::setFixedLon,
             isRunning = isRunning,
-            onPickFile = onPickFile,
-            hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
-            onSelectTrack = viewModel::showTrackSelection,
-            unitSystem = uiState.unitSystem,
         )
 
-        TrackPreviewCard(
-            track = uiState.track,
-            startKm = uiState.startKm,
-            endKm = uiState.endKm,
-            currentPoint = currentPoint,
-            onStartChange = viewModel::setStartKm,
-            onEndChange = viewModel::setEndKm,
-            isRunning = isRunning,
-            isLoading = uiState.isLoading,
-            unitSystem = uiState.unitSystem,
-        )
-        TrackRangeCard(
-            startKm = uiState.startKm,
-            endKm = uiState.endKm,
-            totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
-            onStartChange = viewModel::setStartKm,
-            onEndChange = viewModel::setEndKm,
-            isRunning = isRunning || uiState.track == null,
-            unitSystem = uiState.unitSystem,
-        )
-        TravelModeCard(
-            travelMode = uiState.travelMode,
-            onModeChange = viewModel::setTravelMode,
-            isRunning = isRunning || uiState.track == null,
-        )
+        if (!uiState.useFixedLocation) {
+            FileSelectionCard(
+                fileName = uiState.fileName,
+                track = uiState.track,
+                isRunning = isRunning,
+                onPickFile = onPickFile,
+                hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
+                onSelectTrack = viewModel::showTrackSelection,
+                unitSystem = uiState.unitSystem,
+            )
 
-        SpeedControlCard(
-            speedKmh = uiState.speedKmh,
-            onSpeedChange = viewModel::setSpeed,
-            customMode = uiState.customMode,
-            onCustomModeChange = viewModel::setCustomMode,
-            hasGpxSpeed = uiState.track?.hasSpeedData == true,
-            useGpxSpeed = uiState.useGpxSpeed,
-            onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
-            unitSystem = uiState.unitSystem,
-        )
+            TrackPreviewCard(
+                track = uiState.track,
+                startKm = uiState.startKm,
+                endKm = uiState.endKm,
+                currentPoint = currentPoint,
+                onStartChange = viewModel::setStartKm,
+                onEndChange = viewModel::setEndKm,
+                isRunning = isRunning,
+                isLoading = uiState.isLoading,
+                unitSystem = uiState.unitSystem,
+            )
+            TrackRangeCard(
+                startKm = uiState.startKm,
+                endKm = uiState.endKm,
+                totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
+                onStartChange = viewModel::setStartKm,
+                onEndChange = viewModel::setEndKm,
+                isRunning = isRunning || uiState.track == null,
+                unitSystem = uiState.unitSystem,
+            )
+            TravelModeCard(
+                travelMode = uiState.travelMode,
+                onModeChange = viewModel::setTravelMode,
+                isRunning = isRunning || uiState.track == null,
+            )
+            SpeedControlCard(
+                speedKmh = uiState.speedKmh,
+                onSpeedChange = viewModel::setSpeed,
+                customMode = uiState.customMode,
+                onCustomModeChange = viewModel::setCustomMode,
+                hasGpxSpeed = uiState.track?.hasSpeedData == true,
+                useGpxSpeed = uiState.useGpxSpeed,
+                onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
+                unitSystem = uiState.unitSystem,
+            )
+        }
+
         UpdateRateCard(
             intervalMs = uiState.updateIntervalMs,
             onIntervalChange = viewModel::setUpdateInterval,
@@ -286,9 +298,15 @@ private fun PortraitContent(
             )
         }
 
+        val canStart = if (uiState.useFixedLocation) {
+            uiState.fixedLat.toDoubleOrNull()?.let { it in -90.0..90.0 } == true &&
+                uiState.fixedLon.toDoubleOrNull()?.let { it in -180.0..180.0 } == true
+        } else {
+            uiState.track != null
+        }
         MockControlButton(
             isRunning = isRunning,
-            hasTrack = uiState.track != null,
+            hasTrack = canStart,
             onStart = onStart,
             onStop = onStop,
         )
@@ -320,41 +338,43 @@ private fun LandscapeContent(
                 .fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            FileSelectionCard(
-                fileName = uiState.fileName,
-                track = uiState.track,
-                isRunning = isRunning,
-                onPickFile = onPickFile,
-                hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
-                onSelectTrack = viewModel::showTrackSelection,
-                unitSystem = uiState.unitSystem,
-                isCompact = true,
-            )
+            if (!uiState.useFixedLocation) {
+                FileSelectionCard(
+                    fileName = uiState.fileName,
+                    track = uiState.track,
+                    isRunning = isRunning,
+                    onPickFile = onPickFile,
+                    hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
+                    onSelectTrack = viewModel::showTrackSelection,
+                    unitSystem = uiState.unitSystem,
+                    isCompact = true,
+                )
 
-            TrackPreviewCard(
-                track = uiState.track,
-                startKm = uiState.startKm,
-                endKm = uiState.endKm,
-                currentPoint = currentPoint,
-                onStartChange = viewModel::setStartKm,
-                onEndChange = viewModel::setEndKm,
-                isRunning = isRunning,
-                isLoading = uiState.isLoading,
-                unitSystem = uiState.unitSystem,
-                modifier = Modifier.weight(1f),
-                isCompact = true,
-            )
+                TrackPreviewCard(
+                    track = uiState.track,
+                    startKm = uiState.startKm,
+                    endKm = uiState.endKm,
+                    currentPoint = currentPoint,
+                    onStartChange = viewModel::setStartKm,
+                    onEndChange = viewModel::setEndKm,
+                    isRunning = isRunning,
+                    isLoading = uiState.isLoading,
+                    unitSystem = uiState.unitSystem,
+                    modifier = Modifier.weight(1f),
+                    isCompact = true,
+                )
 
-            TrackRangeCard(
-                startKm = uiState.startKm,
-                endKm = uiState.endKm,
-                totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
-                onStartChange = viewModel::setStartKm,
-                onEndChange = viewModel::setEndKm,
-                isRunning = isRunning || uiState.track == null,
-                unitSystem = uiState.unitSystem,
-                isCompact = true,
-            )
+                TrackRangeCard(
+                    startKm = uiState.startKm,
+                    endKm = uiState.endKm,
+                    totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
+                    onStartChange = viewModel::setStartKm,
+                    onEndChange = viewModel::setEndKm,
+                    isRunning = isRunning || uiState.track == null,
+                    unitSystem = uiState.unitSystem,
+                    isCompact = true,
+                )
+            }
         }
 
         // ===== RIGHT PANE: Controls =====
@@ -371,32 +391,51 @@ private fun LandscapeContent(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                SpeedControlCard(
-                    speedKmh = uiState.speedKmh,
-                    onSpeedChange = viewModel::setSpeed,
-                    customMode = uiState.customMode,
-                    onCustomModeChange = viewModel::setCustomMode,
-                    hasGpxSpeed = uiState.track?.hasSpeedData == true,
-                    useGpxSpeed = uiState.useGpxSpeed,
-                    onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
-                    unitSystem = uiState.unitSystem,
+                FixedLocationCard(
+                    enabled = uiState.useFixedLocation,
+                    lat = uiState.fixedLat,
+                    lon = uiState.fixedLon,
+                    onEnabledChange = viewModel::setUseFixedLocation,
+                    onLatChange = viewModel::setFixedLat,
+                    onLonChange = viewModel::setFixedLon,
+                    isRunning = isRunning,
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    TravelModeCard(
-                        travelMode = uiState.travelMode,
-                        onModeChange = viewModel::setTravelMode,
-                        isRunning = isRunning || uiState.track == null,
-                        modifier = Modifier.weight(1f),
-                        isCompact = true,
+                if (!uiState.useFixedLocation) {
+                    SpeedControlCard(
+                        speedKmh = uiState.speedKmh,
+                        onSpeedChange = viewModel::setSpeed,
+                        customMode = uiState.customMode,
+                        onCustomModeChange = viewModel::setCustomMode,
+                        hasGpxSpeed = uiState.track?.hasSpeedData == true,
+                        useGpxSpeed = uiState.useGpxSpeed,
+                        onUseGpxSpeedChange = viewModel::setUseGpxSpeed,
+                        unitSystem = uiState.unitSystem,
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        TravelModeCard(
+                            travelMode = uiState.travelMode,
+                            onModeChange = viewModel::setTravelMode,
+                            isRunning = isRunning || uiState.track == null,
+                            modifier = Modifier.weight(1f),
+                            isCompact = true,
+                        )
+                        UpdateRateCard(
+                            intervalMs = uiState.updateIntervalMs,
+                            onIntervalChange = viewModel::setUpdateInterval,
+                            modifier = Modifier.weight(1f),
+                            isCompact = true,
+                        )
+                    }
+                } else {
                     UpdateRateCard(
                         intervalMs = uiState.updateIntervalMs,
                         onIntervalChange = viewModel::setUpdateInterval,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         isCompact = true,
                     )
                 }
@@ -412,9 +451,15 @@ private fun LandscapeContent(
             }
 
             // Start/Stop button pinned at bottom
+            val canStart = if (uiState.useFixedLocation) {
+                uiState.fixedLat.toDoubleOrNull()?.let { it in -90.0..90.0 } == true &&
+                    uiState.fixedLon.toDoubleOrNull()?.let { it in -180.0..180.0 } == true
+            } else {
+                uiState.track != null
+            }
             MockControlButton(
                 isRunning = isRunning,
-                hasTrack = uiState.track != null,
+                hasTrack = canStart,
                 onStart = onStart,
                 onStop = onStop,
             )
@@ -1712,6 +1757,68 @@ private fun ProgressCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FixedLocationCard(
+    enabled: Boolean,
+    lat: String,
+    lon: String,
+    onEnabledChange: (Boolean) -> Unit,
+    onLatChange: (String) -> Unit,
+    onLonChange: (String) -> Unit,
+    isRunning: Boolean,
+) {
+    val latValid = lat.toDoubleOrNull()?.let { it in -90.0..90.0 } ?: lat.isEmpty()
+    val lonValid = lon.toDoubleOrNull()?.let { it in -180.0..180.0 } ?: lon.isEmpty()
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Fixed Location", style = MaterialTheme.typography.titleSmall)
+                Switch(checked = enabled, onCheckedChange = { if (!isRunning) onEnabledChange(it) }, enabled = !isRunning)
+            }
+            if (enabled) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = lat,
+                        onValueChange = { onLatChange(it) },
+                        label = { Text("Latitude") },
+                        placeholder = { Text("49.3105") },
+                        isError = lat.isNotEmpty() && !latValid,
+                        supportingText = if (lat.isNotEmpty() && !latValid) {
+                            { Text("−90 to 90") }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        enabled = !isRunning,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = lon,
+                        onValueChange = { onLonChange(it) },
+                        label = { Text("Longitude") },
+                        placeholder = { Text("8.5592") },
+                        isError = lon.isNotEmpty() && !lonValid,
+                        supportingText = if (lon.isNotEmpty() && !lonValid) {
+                            { Text("−180 to 180") }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        enabled = !isRunning,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }

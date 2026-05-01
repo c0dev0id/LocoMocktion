@@ -64,6 +64,7 @@ class MockLocationService : LifecycleService() {
         private var startOffsetMeters: Double = 0.0
         private var endOffsetMeters: Double = Double.MAX_VALUE
         private var travelMode: TravelMode = TravelMode.Normal
+        private var fixedPoint: TrackPoint? = null
 
         fun configure(
             points: List<TrackPoint>,
@@ -81,6 +82,13 @@ class MockLocationService : LifecycleService() {
             startOffsetMeters = offsetMeters
             this.endOffsetMeters = endOffsetMeters
             this.travelMode = travelMode
+            fixedPoint = null
+        }
+
+        fun configureFixed(point: TrackPoint, intervalMs: Long) {
+            fixedPoint = point
+            trackPoints = emptyList()
+            updateIntervalMs = intervalMs
         }
 
         fun updateSpeed(speed: Float) {
@@ -119,7 +127,7 @@ class MockLocationService : LifecycleService() {
             }
         }
 
-        if (trackPoints.isEmpty()) {
+        if (trackPoints.isEmpty() && fixedPoint == null) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -190,8 +198,22 @@ class MockLocationService : LifecycleService() {
             } catch (_: Exception) {
                 // Play Services unavailable — fall back to LocationManager-only mocking.
             }
-            withContext(Dispatchers.Default) { walkTrack() }
+            val fp = fixedPoint
+            if (fp != null) {
+                withContext(Dispatchers.Default) { fixedLoop(fp) }
+            } else {
+                withContext(Dispatchers.Default) { walkTrack() }
+            }
             withContext(Dispatchers.Main) { stopMocking() }
+        }
+    }
+
+    private suspend fun fixedLoop(point: TrackPoint) {
+        _currentPoint.value = point
+        _progress.value = 1f
+        while (isActive) {
+            setMockLocation(point, 0f, 0f)
+            delay(updateIntervalMs)
         }
     }
 
@@ -400,6 +422,7 @@ class MockLocationService : LifecycleService() {
         _progress.value = 0f
         _currentPoint.value = null
         _distanceTraveled.value = 0.0
+        fixedPoint = null
         fusedLocationClient.setMockMode(false)
         for (name in activeMockProviders) {
             try {
@@ -438,7 +461,7 @@ class MockLocationService : LifecycleService() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("LocoMocktion")
-            .setContentText("Mocking location along track…")
+            .setContentText(if (fixedPoint != null) "Mocking fixed location…" else "Mocking location along track…")
             .setSmallIcon(R.drawable.ic_location)
             .setOngoing(true)
             .setContentIntent(openIntent)

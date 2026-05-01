@@ -41,6 +41,9 @@ data class UiState(
     val showTrackSelector: Boolean = false,
     val pendingUri: String? = null,
     val pendingDisplayName: String? = null,
+    val useFixedLocation: Boolean = false,
+    val fixedLat: String = "",
+    val fixedLon: String = "",
 )
 
 sealed interface UpdateState {
@@ -84,6 +87,9 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         } catch (e: IllegalArgumentException) {
             UnitSystem.Metric
         }
+        val savedUseFixedLocation = prefs.getBoolean("use_fixed_location", false)
+        val savedFixedLat = prefs.getString("fixed_lat", "") ?: ""
+        val savedFixedLon = prefs.getString("fixed_lon", "") ?: ""
         _uiState.update {
             it.copy(
                 speedKmh = savedSpeed,
@@ -92,6 +98,9 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                 travelMode = savedMode,
                 useGpxSpeed = savedUseGpxSpeed,
                 unitSystem = savedUnits,
+                useFixedLocation = savedUseFixedLocation,
+                fixedLat = savedFixedLat,
+                fixedLon = savedFixedLon,
             )
         }
 
@@ -256,6 +265,21 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("unit_system", system.name).apply()
     }
 
+    fun setUseFixedLocation(enabled: Boolean) {
+        _uiState.update { it.copy(useFixedLocation = enabled) }
+        prefs.edit().putBoolean("use_fixed_location", enabled).apply()
+    }
+
+    fun setFixedLat(lat: String) {
+        _uiState.update { it.copy(fixedLat = lat) }
+        prefs.edit().putString("fixed_lat", lat).apply()
+    }
+
+    fun setFixedLon(lon: String) {
+        _uiState.update { it.copy(fixedLon = lon) }
+        prefs.edit().putString("fixed_lon", lon).apply()
+    }
+
     fun checkForUpdate() {
         if (_updateState.value is UpdateState.Checking ||
             _updateState.value is UpdateState.Downloading
@@ -307,17 +331,26 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
 
    fun startMocking() {
        val state = _uiState.value
-       val track = state.track ?: return
-       
-       MockLocationService.configure(
-           points = track.points,
-           speed = state.speedKmh / 3.6f,
-           useGpxSpeed = state.useGpxSpeed,
-           intervalMs = state.updateIntervalMs,
-           offsetMeters = (state.startKm * 1000).toDouble(),
-           endOffsetMeters = (state.endKm * 1000).toDouble(),
-           travelMode = state.travelMode,
-       )
+
+       if (state.useFixedLocation) {
+           val lat = state.fixedLat.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: return
+           val lon = state.fixedLon.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: return
+           MockLocationService.configureFixed(
+               point = TrackPoint(lat, lon),
+               intervalMs = state.updateIntervalMs,
+           )
+       } else {
+           val track = state.track ?: return
+           MockLocationService.configure(
+               points = track.points,
+               speed = state.speedKmh / 3.6f,
+               useGpxSpeed = state.useGpxSpeed,
+               intervalMs = state.updateIntervalMs,
+               offsetMeters = (state.startKm * 1000).toDouble(),
+               endOffsetMeters = (state.endKm * 1000).toDouble(),
+               travelMode = state.travelMode,
+           )
+       }
 
        val intent = Intent(app, MockLocationService::class.java)
        app.startForegroundService(intent)
