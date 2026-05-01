@@ -211,7 +211,7 @@ class MockLocationService : LifecycleService() {
     private suspend fun fixedLoop(point: TrackPoint) {
         _currentPoint.value = point
         _progress.value = 1f
-        while (isActive) {
+        while (true) {
             setMockLocation(point, 0f, 0f)
             delay(updateIntervalMs)
         }
