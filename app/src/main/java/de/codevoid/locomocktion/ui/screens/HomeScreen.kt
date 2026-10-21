@@ -2,6 +2,8 @@ package de.codevoid.locomocktion.ui.screens
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,7 +28,9 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
@@ -55,6 +59,7 @@ import de.codevoid.locomocktion.ui.displayToKm
 import de.codevoid.locomocktion.ui.displayToKmh
 import de.codevoid.locomocktion.ui.distanceUnitLabel
 import de.codevoid.locomocktion.ui.formatDistanceKm
+import de.codevoid.locomocktion.ui.formatSpeed
 import de.codevoid.locomocktion.ui.kmToDisplay
 import de.codevoid.locomocktion.ui.kmhToDisplay
 import de.codevoid.locomocktion.ui.speedUnitLabel
@@ -595,7 +600,7 @@ private fun TrackPreviewCard(
     modifier: Modifier = Modifier,
     isCompact: Boolean = false,
 ) {
-    if ((track == null || track.points.size < 2) && !isLoading) {
+    if (track == null || track.points.size < 2) {
         Card(modifier = modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(if (isCompact) 8.dp else 16.dp)) {
                 if (!isCompact) {
@@ -612,40 +617,19 @@ private fun TrackPreviewCard(
                         .then(if (isCompact) Modifier.fillMaxHeight() else Modifier.height(200.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "Load a GPX file to preview the track",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-        return
-    }
-
-    // Show loading placeholder while track is being parsed
-    if (isLoading && (track == null || track.points.size < 2)) {
-        Card(modifier = modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(if (isCompact) 8.dp else 16.dp)) {
-                if (!isCompact) {
-                    Text(
-                        text = "Track Preview",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(if (isCompact) Modifier.fillMaxHeight() else Modifier.height(200.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                        Spacer(modifier = Modifier.height(8.dp))
+                    if (isLoading) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Loading track…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
                         Text(
-                            "Loading track\u2026",
+                            "Load a GPX file to preview the track",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -656,8 +640,7 @@ private fun TrackPreviewCard(
         return
     }
 
-    // From here on, track is guaranteed non-null with >= 2 points
-    val points = track!!.points
+    val points = track.points
     val cumulativeDistances = track.cumulativeMeters
     val totalDistMeters = track.totalDistanceMeters
 
@@ -694,9 +677,6 @@ private fun TrackPreviewCard(
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var rotationAngle by remember { mutableFloatStateOf(0f) }
     var zoomedToSelection by remember { mutableStateOf(false) }
-    val currentZoomScale by rememberUpdatedState(zoomScale)
-    val currentPanOffset by rememberUpdatedState(panOffset)
-    val currentRotationAngle by rememberUpdatedState(rotationAngle)
 
     // Reset zoom/rotation when track changes
     LaunchedEffect(track) {
@@ -710,10 +690,30 @@ private fun TrackPreviewCard(
     var containerWidthPx by remember { mutableFloatStateOf(0f) }
     var containerHeightPx by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
+    val paddingPx = with(density) { 16.dp.toPx() }
+    val labelPaint = remember { Paint().apply { isAntiAlias = true; typeface = Typeface.DEFAULT_BOLD } }
+    val labelBgPaint = remember { Paint().apply { isAntiAlias = true } }
+
+    fun rotateAroundCenter(pos: Offset, angle: Float, canvasW: Float, canvasH: Float): Offset {
+        val cx = canvasW / 2f
+        val cy = canvasH / 2f
+        val cos = kotlin.math.cos(angle.toDouble()).toFloat()
+        val sin = kotlin.math.sin(angle.toDouble()).toFloat()
+        val dx = pos.x - cx
+        val dy = pos.y - cy
+        return Offset(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+    }
+
+    // Maps a track point to canvas pixels under the current zoom, pan and rotation.
+    fun project(p: TrackPoint, canvasW: Float, canvasH: Float): Offset {
+        val rawX = ((p.longitude - minLon) / lonRange * (canvasW - 2 * paddingPx) + paddingPx).toFloat()
+        val rawY = ((1 - (p.latitude - minLat) / latRange) * (canvasH - 2 * paddingPx) + paddingPx).toFloat()
+        val zoomed = Offset(rawX * zoomScale + panOffset.x, rawY * zoomScale + panOffset.y)
+        return rotateAroundCenter(zoomed, rotationAngle, canvasW, canvasH)
+    }
 
     fun zoomToSelection() {
         if (containerWidthPx <= 0f || containerHeightPx <= 0f) return
-        val paddingPx = with(density) { 16.dp.toPx() }
         val w = containerWidthPx - 2 * paddingPx
         val h = containerHeightPx - 2 * paddingPx
 
@@ -825,35 +825,11 @@ private fun TrackPreviewCard(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(track) {
-                            val paddingPx = 16.dp.toPx()
                             val canvasW = size.width.toFloat()
                             val canvasH = size.height.toFloat()
-                            val drawW = canvasW - 2 * paddingPx
-                            val drawH = canvasH - 2 * paddingPx
                             val hitRadiusPx = 32.dp.toPx()
 
-                            fun rotateAroundCenter(pos: Offset, angle: Float): Offset {
-                                val cx = canvasW / 2f
-                                val cy = canvasH / 2f
-                                val cos = kotlin.math.cos(angle.toDouble()).toFloat()
-                                val sin = kotlin.math.sin(angle.toDouble()).toFloat()
-                                val dx = pos.x - cx
-                                val dy = pos.y - cy
-                                return Offset(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
-                            }
-
-                            fun unrotateAroundCenter(pos: Offset, angle: Float): Offset =
-                                rotateAroundCenter(pos, -angle)
-
-                            fun toScreen(p: TrackPoint): Offset {
-                                val rawX = ((p.longitude - minLon) / lonRange * drawW + paddingPx).toFloat()
-                                val rawY = ((1 - (p.latitude - minLat) / latRange) * drawH + paddingPx).toFloat()
-                                val zoomed = Offset(
-                                    rawX * currentZoomScale + currentPanOffset.x,
-                                    rawY * currentZoomScale + currentPanOffset.y,
-                                )
-                                return rotateAroundCenter(zoomed, currentRotationAngle)
-                            }
+                            fun toScreen(p: TrackPoint) = project(p, canvasW, canvasH)
 
                             fun nearestMetersOnTrack(touchPos: Offset): Double {
                                 var bestDistSq = Float.MAX_VALUE
@@ -888,10 +864,8 @@ private fun TrackPreviewCard(
                                 val startPos = toScreen(positionAtMeters((currentStartKm * 1000).toDouble()))
                                 val endPos = toScreen(positionAtMeters((currentEndKm * 1000).toDouble()))
 
-                                val diffStart = down.position - startPos
-                                val dStart = kotlin.math.sqrt(diffStart.x * diffStart.x + diffStart.y * diffStart.y)
-                                val diffEnd = down.position - endPos
-                                val dEnd = kotlin.math.sqrt(diffEnd.x * diffEnd.x + diffEnd.y * diffEnd.y)
+                                val dStart = (down.position - startPos).getDistance()
+                                val dEnd = (down.position - endPos).getDistance()
 
                                 val target = when {
                                     dStart <= hitRadiusPx && dStart <= dEnd -> "start"
@@ -940,11 +914,7 @@ private fun TrackPreviewCard(
                                             val p0 = sorted[0].position
                                             val p1 = sorted[1].position
 
-                                            val spread = pressed.maxOf {
-                                                val dx = it.position.x - centroid.x
-                                                val dy = it.position.y - centroid.y
-                                                kotlin.math.sqrt(dx * dx + dy * dy)
-                                            }
+                                            val spread = pressed.maxOf { (it.position - centroid).getDistance() }
                                             val angle = kotlin.math.atan2(
                                                 (p1.y - p0.y).toDouble(),
                                                 (p1.x - p0.x).toDouble(),
@@ -954,7 +924,7 @@ private fun TrackPreviewCard(
                                                 // Zoom around centroid (un-rotated to content space)
                                                 val scaleFactor = spread / prevSpread
                                                 val newScale = (zoomScale * scaleFactor).coerceIn(1f, 20f)
-                                                val contentFocal = unrotateAroundCenter(centroid, rotationAngle)
+                                                val contentFocal = rotateAroundCenter(centroid, -rotationAngle, canvasW, canvasH)
                                                 panOffset = Offset(
                                                     contentFocal.x - (contentFocal.x - panOffset.x) * (newScale / zoomScale),
                                                     contentFocal.y - (contentFocal.y - panOffset.y) * (newScale / zoomScale),
@@ -994,31 +964,7 @@ private fun TrackPreviewCard(
                             }
                         },
                 ) {
-                    if (points.size < 2) return@Canvas
-
-                    val paddingPx = 16.dp.toPx()
-                    val w = size.width - 2 * paddingPx
-                    val h = size.height - 2 * paddingPx
-
-                    fun rotateAroundCenter(pos: Offset, angle: Float): Offset {
-                        val cx = size.width / 2f
-                        val cy = size.height / 2f
-                        val cos = kotlin.math.cos(angle.toDouble()).toFloat()
-                        val sin = kotlin.math.sin(angle.toDouble()).toFloat()
-                        val dx = pos.x - cx
-                        val dy = pos.y - cy
-                        return Offset(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
-                    }
-
-                    fun toOffset(p: TrackPoint): Offset {
-                        val rawX = ((p.longitude - minLon) / lonRange * w + paddingPx).toFloat()
-                        val rawY = ((1 - (p.latitude - minLat) / latRange) * h + paddingPx).toFloat()
-                        val zoomed = Offset(
-                            rawX * zoomScale + panOffset.x,
-                            rawY * zoomScale + panOffset.y,
-                        )
-                        return rotateAroundCenter(zoomed, rotationAngle)
-                    }
+                    fun toOffset(p: TrackPoint) = project(p, size.width, size.height)
 
                     // Draw track line: active range in full color, inactive in faded
                     val startMeters = (startKm * 1000).toDouble()
@@ -1049,28 +995,30 @@ private fun TrackPreviewCard(
                     val endpointStroke = 3.dp.toPx()
                     val endpointColor = trackColor.copy(alpha = 0.5f)
 
-                    if (points.size >= 2) {
-                        val p0 = toOffset(points[0])
-                        val p1 = toOffset(points[1])
-                        val dx0 = p1.x - p0.x
-                        val dy0 = p1.y - p0.y
-                        val len0 = kotlin.math.sqrt(dx0 * dx0 + dy0 * dy0)
-                        if (len0 > 0.1f) {
-                            val perpX = -dy0 / len0 * endpointBarLen
-                            val perpY = dx0 / len0 * endpointBarLen
-                            drawLine(endpointColor, Offset(p0.x + perpX, p0.y + perpY), Offset(p0.x - perpX, p0.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
-                        }
+                    fun drawEndpointBar(at: Offset, toward: Offset) {
+                        val dir = toward - at
+                        val len = dir.getDistance()
+                        if (len <= 0.1f) return
+                        val perp = Offset(-dir.y, dir.x) / len * endpointBarLen
+                        drawLine(endpointColor, at + perp, at - perp, strokeWidth = endpointStroke, cap = StrokeCap.Round)
+                    }
+                    drawEndpointBar(toOffset(points[0]), toOffset(points[1]))
+                    drawEndpointBar(toOffset(points.last()), toOffset(points[points.size - 2]))
 
-                        val pN = toOffset(points.last())
-                        val pPrev = toOffset(points[points.size - 2])
-                        val dxN = pN.x - pPrev.x
-                        val dyN = pN.y - pPrev.y
-                        val lenN = kotlin.math.sqrt(dxN * dxN + dyN * dyN)
-                        if (lenN > 0.1f) {
-                            val perpX = -dyN / lenN * endpointBarLen
-                            val perpY = dxN / lenN * endpointBarLen
-                            drawLine(endpointColor, Offset(pN.x + perpX, pN.y + perpY), Offset(pN.x - perpX, pN.y - perpY), strokeWidth = endpointStroke, cap = StrokeCap.Round)
-                        }
+                    val nativeCanvas = drawContext.canvas.nativeCanvas
+                    fun drawLabel(text: String, centerX: Float, baselineY: Float, textColor: Int, textSizePx: Float, bgColor: Int, padX: Float) {
+                        labelPaint.color = textColor
+                        labelPaint.textSize = textSizePx
+                        labelBgPaint.color = bgColor
+                        val textW = labelPaint.measureText(text)
+                        nativeCanvas.drawRoundRect(
+                            centerX - textW / 2 - padX,
+                            baselineY - textSizePx,
+                            centerX + textW / 2 + padX,
+                            baselineY + 3.dp.toPx(),
+                            4.dp.toPx(), 4.dp.toPx(), labelBgPaint,
+                        )
+                        nativeCanvas.drawText(text, centerX - textW / 2, baselineY, labelPaint)
                     }
 
                     // --- Direction arrows along active segment ---
@@ -1086,12 +1034,11 @@ private fun TrackPreviewCard(
                             if (kotlin.math.abs(mAhead - m) < 1.0) continue
                             val pt = toOffset(positionAtMeters(m))
                             val ptAhead = toOffset(positionAtMeters(mAhead))
-                            val dx = ptAhead.x - pt.x
-                            val dy = ptAhead.y - pt.y
-                            val len = kotlin.math.sqrt(dx * dx + dy * dy)
+                            val dir = ptAhead - pt
+                            val len = dir.getDistance()
                             if (len < 0.1f) continue
-                            val ux = dx / len
-                            val uy = dy / len
+                            val ux = dir.x / len
+                            val uy = dir.y / len
                             val px = -uy
                             val py = ux
                             val tipX = pt.x + ux * arrowLen
@@ -1100,7 +1047,7 @@ private fun TrackPreviewCard(
                             val baseLeftY = pt.y - uy * arrowLen * 0.3f + py * arrowHalfW
                             val baseRightX = pt.x - ux * arrowLen * 0.3f - px * arrowHalfW
                             val baseRightY = pt.y - uy * arrowLen * 0.3f - py * arrowHalfW
-                            val arrowPath = androidx.compose.ui.graphics.Path().apply {
+                            val arrowPath = Path().apply {
                                 moveTo(tipX, tipY)
                                 lineTo(baseLeftX, baseLeftY)
                                 lineTo(baseRightX, baseRightY)
@@ -1110,149 +1057,76 @@ private fun TrackPreviewCard(
                             drawPath(
                                 arrowPath,
                                 color = trackColor,
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f.dp.toPx()),
+                                style = Stroke(width = 1.5f.dp.toPx()),
                             )
                         }
 
                         // Distance label at midpoint of active range
                         val midPt = toOffset(positionAtMeters(lowMeters + rangeMeters * 0.5))
-                        val distLabel = formatDistanceKm(rangeMeters / 1000.0, unitSystem, decimals = 1)
-                        val distPaint = android.graphics.Paint().apply {
-                            color = 0xFF333333.toInt()
-                            textSize = 9.sp.toPx()
-                            isAntiAlias = true
-                            typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        }
-                        val distTextW = distPaint.measureText(distLabel)
-                        val distBgPaint = android.graphics.Paint().apply {
-                            color = 0xCCFFFFFF.toInt()
-                            isAntiAlias = true
-                        }
-                        val labelY = midPt.y - 10.dp.toPx()
-                        drawContext.canvas.nativeCanvas.drawRoundRect(
-                            midPt.x - distTextW / 2 - 4.dp.toPx(),
-                            labelY - 9.sp.toPx(),
-                            midPt.x + distTextW / 2 + 4.dp.toPx(),
-                            labelY + 3.dp.toPx(),
-                            4.dp.toPx(), 4.dp.toPx(), distBgPaint,
-                        )
-                        drawContext.canvas.nativeCanvas.drawText(
-                            distLabel,
-                            midPt.x - distTextW / 2,
-                            labelY,
-                            distPaint,
+                        drawLabel(
+                            text = formatDistanceKm(rangeMeters / 1000.0, unitSystem, decimals = 1),
+                            centerX = midPt.x,
+                            baselineY = midPt.y - 10.dp.toPx(),
+                            textColor = 0xFF333333.toInt(),
+                            textSizePx = 9.sp.toPx(),
+                            bgColor = 0xCCFFFFFF.toInt(),
+                            padX = 4.dp.toPx(),
                         )
                     }
 
-                    // --- Start flag marker (draggable) ---
-                    val startPos = toOffset(positionAtMeters(startMeters))
+                    // --- Start/end flag markers (draggable) ---
                     val flagPole = 28.dp.toPx()
                     val flagW = 16.dp.toPx()
                     val flagH = 12.dp.toPx()
-                    val poleWidth = 2.5f.dp.toPx()
-                    val baseR = 5.dp.toPx()
-                    val startGreen = Color(0xFF4CAF50)
-
-                    drawLine(
-                        color = startGreen,
-                        start = Offset(startPos.x, startPos.y),
-                        end = Offset(startPos.x, startPos.y - flagPole),
-                        strokeWidth = poleWidth,
-                        cap = StrokeCap.Round,
-                    )
-                    drawRect(
-                        color = startGreen,
-                        topLeft = Offset(startPos.x, startPos.y - flagPole),
-                        size = Size(flagW, flagH),
-                    )
                     val cellW = flagW / 2f
                     val cellH = flagH / 2f
-                    val flagTop = startPos.y - flagPole
-                    drawRect(color = Color.White, topLeft = Offset(startPos.x, flagTop), size = Size(cellW, cellH))
-                    drawRect(color = Color.White, topLeft = Offset(startPos.x + cellW, flagTop + cellH), size = Size(cellW, cellH))
-                    drawCircle(color = startGreen, radius = baseR, center = startPos)
-                    drawCircle(color = Color.White, radius = baseR * 0.5f, center = startPos)
+                    val poleWidth = 2.5f.dp.toPx()
+                    val baseR = 5.dp.toPx()
+                    fun drawFlag(pos: Offset, color: Color, flagLeft: Boolean) {
+                        val flagX = if (flagLeft) pos.x - flagW else pos.x
+                        val flagTop = pos.y - flagPole
+                        drawLine(color, start = pos, end = Offset(pos.x, flagTop), strokeWidth = poleWidth, cap = StrokeCap.Round)
+                        drawRect(color, topLeft = Offset(flagX, flagTop), size = Size(flagW, flagH))
+                        drawRect(Color.White, topLeft = Offset(flagX, flagTop), size = Size(cellW, cellH))
+                        drawRect(Color.White, topLeft = Offset(flagX + cellW, flagTop + cellH), size = Size(cellW, cellH))
+                        drawCircle(color, radius = baseR, center = pos)
+                        drawCircle(Color.White, radius = baseR * 0.5f, center = pos)
+                    }
 
-                    // --- End flag marker (draggable) ---
-                    val endPos = toOffset(positionAtMeters(endMeters))
+                    val startGreen = Color(0xFF4CAF50)
                     val endBlue = Color(0xFF2196F3)
+                    val startPos = toOffset(positionAtMeters(startMeters))
+                    val endPos = toOffset(positionAtMeters(endMeters))
+                    drawFlag(startPos, startGreen, flagLeft = false)
+                    drawFlag(endPos, endBlue, flagLeft = true)
 
-                    drawLine(
-                        color = endBlue,
-                        start = Offset(endPos.x, endPos.y),
-                        end = Offset(endPos.x, endPos.y - flagPole),
-                        strokeWidth = poleWidth,
-                        cap = StrokeCap.Round,
+                    // --- Km labels below the flag bases ---
+                    val labelTextSize = 10.sp.toPx()
+                    val labelOffY = baseR + labelTextSize + 2.dp.toPx()
+                    drawLabel(
+                        text = formatDistanceKm(startKm.toDouble(), unitSystem, decimals = 1),
+                        centerX = startPos.x,
+                        baselineY = startPos.y + labelOffY,
+                        textColor = 0xFF2E7D32.toInt(),
+                        textSizePx = labelTextSize,
+                        bgColor = 0xDDFFFFFF.toInt(),
+                        padX = 3.dp.toPx(),
                     )
-                    drawRect(
-                        color = endBlue,
-                        topLeft = Offset(endPos.x - flagW, endPos.y - flagPole),
-                        size = Size(flagW, flagH),
-                    )
-                    val endFlagTop = endPos.y - flagPole
-                    drawRect(color = Color.White, topLeft = Offset(endPos.x - flagW, endFlagTop), size = Size(cellW, cellH))
-                    drawRect(color = Color.White, topLeft = Offset(endPos.x - cellW, endFlagTop + cellH), size = Size(cellW, cellH))
-                    drawCircle(color = endBlue, radius = baseR, center = endPos)
-                    drawCircle(color = Color.White, radius = baseR * 0.5f, center = endPos)
-
-                    // --- Km labels using native canvas ---
-                    val nativeCanvas = drawContext.canvas.nativeCanvas
-                    val textSizePx = 10.sp.toPx()
-                    val startLabel = formatDistanceKm(startKm.toDouble(), unitSystem, decimals = 1)
-                    val endLabel = formatDistanceKm(endKm.toDouble(), unitSystem, decimals = 1)
-
-                    val startLabelPaint = android.graphics.Paint().apply {
-                        color = 0xFF2E7D32.toInt()
-                        this.textSize = textSizePx
-                        isAntiAlias = true
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    }
-                    val endLabelPaint = android.graphics.Paint().apply {
-                        color = 0xFF1565C0.toInt()
-                        this.textSize = textSizePx
-                        isAntiAlias = true
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    }
-
-                    val labelOffY = baseR + textSizePx + 2.dp.toPx()
-                    val startTextW = startLabelPaint.measureText(startLabel)
-                    val bgPaint = android.graphics.Paint().apply {
-                        color = 0xDDFFFFFF.toInt()
-                        isAntiAlias = true
-                    }
-                    nativeCanvas.drawRoundRect(
-                        startPos.x - startTextW / 2 - 3.dp.toPx(),
-                        startPos.y + labelOffY - textSizePx,
-                        startPos.x + startTextW / 2 + 3.dp.toPx(),
-                        startPos.y + labelOffY + 3.dp.toPx(),
-                        4.dp.toPx(), 4.dp.toPx(), bgPaint,
-                    )
-                    nativeCanvas.drawText(
-                        startLabel,
-                        startPos.x - startTextW / 2,
-                        startPos.y + labelOffY,
-                        startLabelPaint,
-                    )
-
-                    val endTextW = endLabelPaint.measureText(endLabel)
-                    nativeCanvas.drawRoundRect(
-                        endPos.x - endTextW / 2 - 3.dp.toPx(),
-                        endPos.y + labelOffY - textSizePx,
-                        endPos.x + endTextW / 2 + 3.dp.toPx(),
-                        endPos.y + labelOffY + 3.dp.toPx(),
-                        4.dp.toPx(), 4.dp.toPx(), bgPaint,
-                    )
-                    nativeCanvas.drawText(
-                        endLabel,
-                        endPos.x - endTextW / 2,
-                        endPos.y + labelOffY,
-                        endLabelPaint,
+                    drawLabel(
+                        text = formatDistanceKm(endKm.toDouble(), unitSystem, decimals = 1),
+                        centerX = endPos.x,
+                        baselineY = endPos.y + labelOffY,
+                        textColor = 0xFF1565C0.toInt(),
+                        textSizePx = labelTextSize,
+                        bgColor = 0xDDFFFFFF.toInt(),
+                        padX = 3.dp.toPx(),
                     )
 
                     // Red dot: current position (while mocking)
                     currentPoint?.let { cp ->
-                        drawCircle(color = Color(0xFFF44336), radius = 8.dp.toPx(), center = toOffset(cp))
-                        drawCircle(color = Color.White, radius = 4.dp.toPx(), center = toOffset(cp))
+                        val center = toOffset(cp)
+                        drawCircle(color = Color(0xFFF44336), radius = 8.dp.toPx(), center = center)
+                        drawCircle(color = Color.White, radius = 4.dp.toPx(), center = center)
                     }
                 }
 
@@ -1473,11 +1347,6 @@ private fun SpeedControlCard(
         )
     }
 
-    val onPresetChange: (Float) -> Unit = { displayValue ->
-        onCustomModeChange(false)
-        onSpeedChange(displayToKmh(displayValue, unitSystem))
-    }
-
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1494,7 +1363,7 @@ private fun SpeedControlCard(
                     text = if (useGpxSpeed && hasGpxSpeed) {
                         "GPX speed"
                     } else {
-                        "%.0f %s".format(kmhToDisplay(speedKmh, unitSystem), speedUnitLabel(unitSystem))
+                        formatSpeed(speedKmh, unitSystem)
                     },
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
@@ -1547,12 +1416,21 @@ private fun SpeedControlCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     presets.forEach { (label, value) ->
-                        SpeedPreset(
-                            label = "$label\n${value.toInt()}",
-                            displayValue = value,
-                            onSpeedChange = onPresetChange,
+                        FilledTonalButton(
+                            onClick = {
+                                onCustomModeChange(false)
+                                onSpeedChange(displayToKmh(value, unitSystem))
+                            },
                             modifier = Modifier.weight(1f),
-                        )
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(4.dp),
+                        ) {
+                            Text(
+                                text = "$label\n${value.toInt()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 2,
+                            )
+                        }
                     }
                     FilledTonalButton(
                         onClick = {
@@ -1601,27 +1479,6 @@ private fun SpeedControlCard(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SpeedPreset(
-    label: String,
-    displayValue: Float,
-    onSpeedChange: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    FilledTonalButton(
-        onClick = { onSpeedChange(displayValue) },
-        modifier = modifier,
-        shape = RoundedCornerShape(8.dp),
-        contentPadding = PaddingValues(4.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
-        )
     }
 }
 
@@ -1755,7 +1612,7 @@ private fun FixedLocationCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("Fixed Location", style = MaterialTheme.typography.titleSmall)
-                Switch(checked = enabled, onCheckedChange = { if (!isRunning) onEnabledChange(it) }, enabled = !isRunning)
+                Switch(checked = enabled, onCheckedChange = onEnabledChange, enabled = !isRunning)
             }
             if (enabled) {
                 Row(
@@ -1764,7 +1621,7 @@ private fun FixedLocationCard(
                 ) {
                     OutlinedTextField(
                         value = lat,
-                        onValueChange = { onLatChange(it) },
+                        onValueChange = onLatChange,
                         label = { Text("Latitude") },
                         placeholder = { Text("49.3105") },
                         isError = latError,
@@ -1778,7 +1635,7 @@ private fun FixedLocationCard(
                     )
                     OutlinedTextField(
                         value = lon,
-                        onValueChange = { onLonChange(it) },
+                        onValueChange = onLonChange,
                         label = { Text("Longitude") },
                         placeholder = { Text("8.5592") },
                         isError = lonError,
