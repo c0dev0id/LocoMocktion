@@ -2,7 +2,6 @@ package de.codevoid.locomocktion.ui.screens
 
 import android.content.Intent
 import android.content.res.Configuration
-import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,10 +42,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.codevoid.locomocktion.BuildConfig
 import de.codevoid.locomocktion.MainViewModel
+import de.codevoid.locomocktion.UiState
 import de.codevoid.locomocktion.UpdateState
 import de.codevoid.locomocktion.gpx.GpxTrack
 import de.codevoid.locomocktion.gpx.TrackPoint
-import de.codevoid.locomocktion.gpx.distanceBetween
+import de.codevoid.locomocktion.gpx.interpolate
+import de.codevoid.locomocktion.parseLatitude
+import de.codevoid.locomocktion.parseLongitude
 import de.codevoid.locomocktion.service.TravelMode
 import de.codevoid.locomocktion.ui.UnitSystem
 import de.codevoid.locomocktion.ui.displayToKm
@@ -80,14 +82,7 @@ fun HomeScreen(viewModel: MainViewModel) {
                 uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         } catch (_: Exception) {}
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        val name = cursor?.use {
-            if (it.moveToFirst()) {
-                val idx = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) it.getString(idx) else null
-            } else null
-        }
-        viewModel.loadGpx(uri, name)
+        viewModel.loadGpx(uri, null)
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -210,7 +205,7 @@ fun HomeScreen(viewModel: MainViewModel) {
 @Composable
 private fun PortraitContent(
     modifier: Modifier,
-    uiState: de.codevoid.locomocktion.UiState,
+    uiState: UiState,
     isRunning: Boolean,
     progress: Float,
     currentPoint: TrackPoint?,
@@ -242,7 +237,7 @@ private fun PortraitContent(
                 track = uiState.track,
                 isRunning = isRunning,
                 onPickFile = onPickFile,
-                hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
+                hasMultipleTracks = uiState.hasMultipleTracks,
                 onSelectTrack = viewModel::showTrackSelection,
                 unitSystem = uiState.unitSystem,
             )
@@ -261,7 +256,7 @@ private fun PortraitContent(
             TrackRangeCard(
                 startKm = uiState.startKm,
                 endKm = uiState.endKm,
-                totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
+                totalDistanceKm = uiState.track?.totalDistanceKm ?: 0.0,
                 onStartChange = viewModel::setStartKm,
                 onEndChange = viewModel::setEndKm,
                 isRunning = isRunning || uiState.track == null,
@@ -298,15 +293,9 @@ private fun PortraitContent(
             )
         }
 
-        val canStart = if (uiState.useFixedLocation) {
-            uiState.fixedLat.toDoubleOrNull()?.let { it in -90.0..90.0 } == true &&
-                uiState.fixedLon.toDoubleOrNull()?.let { it in -180.0..180.0 } == true
-        } else {
-            uiState.track != null
-        }
         MockControlButton(
             isRunning = isRunning,
-            hasTrack = canStart,
+            canStart = uiState.canStart,
             onStart = onStart,
             onStop = onStop,
         )
@@ -317,7 +306,7 @@ private fun PortraitContent(
 @Composable
 private fun LandscapeContent(
     modifier: Modifier,
-    uiState: de.codevoid.locomocktion.UiState,
+    uiState: UiState,
     isRunning: Boolean,
     progress: Float,
     currentPoint: TrackPoint?,
@@ -344,7 +333,7 @@ private fun LandscapeContent(
                     track = uiState.track,
                     isRunning = isRunning,
                     onPickFile = onPickFile,
-                    hasMultipleTracks = (uiState.availableTracks?.size ?: 0) > 1,
+                    hasMultipleTracks = uiState.hasMultipleTracks,
                     onSelectTrack = viewModel::showTrackSelection,
                     unitSystem = uiState.unitSystem,
                     isCompact = true,
@@ -367,7 +356,7 @@ private fun LandscapeContent(
                 TrackRangeCard(
                     startKm = uiState.startKm,
                     endKm = uiState.endKm,
-                    totalDistanceKm = (uiState.track?.totalDistanceMeters ?: 0.0) / 1000.0,
+                    totalDistanceKm = uiState.track?.totalDistanceKm ?: 0.0,
                     onStartChange = viewModel::setStartKm,
                     onEndChange = viewModel::setEndKm,
                     isRunning = isRunning || uiState.track == null,
@@ -451,15 +440,9 @@ private fun LandscapeContent(
             }
 
             // Start/Stop button pinned at bottom
-            val canStart = if (uiState.useFixedLocation) {
-                uiState.fixedLat.toDoubleOrNull()?.let { it in -90.0..90.0 } == true &&
-                    uiState.fixedLon.toDoubleOrNull()?.let { it in -180.0..180.0 } == true
-            } else {
-                uiState.track != null
-            }
             MockControlButton(
                 isRunning = isRunning,
-                hasTrack = canStart,
+                canStart = uiState.canStart,
                 onStart = onStart,
                 onStop = onStop,
             )
@@ -505,7 +488,7 @@ private fun FileSelectionCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "${track.points.size} pts · ${formatDistanceKm(track.totalDistanceMeters / 1000.0, unitSystem, decimals = 1)}",
+                            text = "${track.points.size} pts · ${formatDistanceKm(track.totalDistanceKm, unitSystem, decimals = 1)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -560,7 +543,7 @@ private fun FileSelectionCard(
                             Text(text = fileName, style = MaterialTheme.typography.bodyLarge)
                             Text(
                                 text = "${track.points.size} points · " +
-                                        formatDistanceKm(track.totalDistanceMeters / 1000.0, unitSystem),
+                                        formatDistanceKm(track.totalDistanceKm, unitSystem),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -675,16 +658,8 @@ private fun TrackPreviewCard(
 
     // From here on, track is guaranteed non-null with >= 2 points
     val points = track!!.points
-
-    // Pre-compute cumulative distances along the track
-    val cumulativeDistances = remember(track) {
-        val dists = mutableListOf(0.0)
-        for (i in 0 until points.size - 1) {
-            dists.add(dists.last() + distanceBetween(points[i], points[i + 1]))
-        }
-        dists
-    }
-    val totalDistMeters = cumulativeDistances.last()
+    val cumulativeDistances = track.cumulativeMeters
+    val totalDistMeters = track.totalDistanceMeters
 
     // Pre-compute geographic bounds for coordinate mapping
     val minLat = remember(track) { points.minOf { it.latitude } }
@@ -703,10 +678,7 @@ private fun TrackPreviewCard(
                 val segLen = cumulativeDistances[i + 1] - segStart
                 if (segLen < 0.1) return points[i]
                 val f = ((m - segStart) / segLen).coerceIn(0.0, 1.0)
-                return TrackPoint(
-                    points[i].latitude + (points[i + 1].latitude - points[i].latitude) * f,
-                    points[i].longitude + (points[i + 1].longitude - points[i].longitude) * f,
-                )
+                return interpolate(points[i], points[i + 1], f)
             }
         }
         return points.last()
@@ -1772,8 +1744,8 @@ private fun FixedLocationCard(
     onLonChange: (String) -> Unit,
     isRunning: Boolean,
 ) {
-    val latValid = lat.toDoubleOrNull()?.let { it in -90.0..90.0 } ?: lat.isEmpty()
-    val lonValid = lon.toDoubleOrNull()?.let { it in -180.0..180.0 } ?: lon.isEmpty()
+    val latError = lat.isNotEmpty() && parseLatitude(lat) == null
+    val lonError = lon.isNotEmpty() && parseLongitude(lon) == null
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1795,8 +1767,8 @@ private fun FixedLocationCard(
                         onValueChange = { onLatChange(it) },
                         label = { Text("Latitude") },
                         placeholder = { Text("49.3105") },
-                        isError = lat.isNotEmpty() && !latValid,
-                        supportingText = if (lat.isNotEmpty() && !latValid) {
+                        isError = latError,
+                        supportingText = if (latError) {
                             { Text("−90 to 90") }
                         } else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -1809,8 +1781,8 @@ private fun FixedLocationCard(
                         onValueChange = { onLonChange(it) },
                         label = { Text("Longitude") },
                         placeholder = { Text("8.5592") },
-                        isError = lon.isNotEmpty() && !lonValid,
-                        supportingText = if (lon.isNotEmpty() && !lonValid) {
+                        isError = lonError,
+                        supportingText = if (lonError) {
                             { Text("−180 to 180") }
                         } else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -1827,7 +1799,7 @@ private fun FixedLocationCard(
 @Composable
 private fun MockControlButton(
     isRunning: Boolean,
-    hasTrack: Boolean,
+    canStart: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -1836,7 +1808,7 @@ private fun MockControlButton(
         modifier = Modifier
             .fillMaxWidth()
             .height(56.dp),
-        enabled = isRunning || hasTrack,
+        enabled = isRunning || canStart,
         colors = if (isRunning) {
             ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.error,
@@ -1928,7 +1900,7 @@ private fun TrackSelectionDialog(
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "${track.points.size} points · ${formatDistanceKm(track.totalDistanceMeters / 1000.0, unitSystem, decimals = 1)}",
+                                    text = "${track.points.size} points · ${formatDistanceKm(track.totalDistanceKm, unitSystem, decimals = 1)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
