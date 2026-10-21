@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 LocoMocktion is an Android app that mocks the device's location. It replays a GPX
 track as moving GPS coordinates (at a configurable speed / travel mode) or holds a
 single fixed coordinate indefinitely. Package: `de.codevoid.locomocktion`.
+minSdk 26, targetSdk 35, Kotlin 2.1, Jetpack Compose with Material3, JDK 17.
 
 ## Build & CI
 
@@ -20,39 +21,57 @@ builds are done by CI. Reference only:
 when unset. `BuildConfig.VERSION_NAME` is the single source of truth the in-app
 update checker compares against GitHub releases.
 
+Release builds are minified (R8). The only keep rule in `proguard-rules.pro` is for
+the `gpx` package.
+
 CI workflows (`.github/workflows/`):
-- `build.yml` — on push to `main`: builds a signed **nightly** prerelease and force-moves
-  the rolling `nightly` tag. Debug builds run only for `claude/**` branches.
-- `release.yml` — manual `workflow_dispatch`; builds signed APK, auto-increments the
-  patch version from the latest `vX.Y.Z` tag (or takes an explicit input), publishes a draft.
+- `build.yml` — fires **only on push to `main`**. The `nightly` job builds a signed
+  release APK with `-PversionName=nightly`, deletes the previous `nightly` release,
+  force-moves the rolling `nightly` tag to HEAD and publishes a prerelease. The
+  `debug-build` job in the same file is unreachable: its `if` matches `claude/**`
+  refs but the workflow never triggers for them.
+- `release.yml` — manual `workflow_dispatch`; takes an explicit `vX.Y.Z` input or
+  auto-increments the patch of the latest `v*` tag, builds the signed APK, pushes the
+  tag and publishes a **draft** release with generated notes.
 
-To pull the latest CI APK onto a device and grant all required permissions/appops,
-use `reinstall.sh` (uses `gh` + `adb`; includes the crucial
-`adb shell appops set … android:mock_location allow`).
+`reinstall.sh` (uses `gh` + `adb`) installs the APK on a device and grants all
+required permissions, including the crucial
+`adb shell appops set … android:mock_location allow`. It downloads the `app-debug`
+artifact of the latest Build run, which no job produces anymore, so the download
+step currently fails.
 
-No test suite exists yet.
+No test sources, test dependencies, or lint tooling exist. Adding tests means adding
+`testImplementation` dependencies to `app/build.gradle.kts` first.
 
 ## Architecture
 
-Single-activity Jetpack Compose (Material3) app. MVVM with `StateFlow`. No navigation
-library — one `HomeScreen` composable renders everything off a single `UiState`.
+Single-activity Jetpack Compose app. MVVM with `StateFlow`. No navigation
+library, no DI, no HTTP library (`HttpURLConnection` + `org.json`).
 
 Data flow: `MainActivity` → `MainViewModel` (`UiState` + settings persistence) →
 `MockLocationService` (the engine) → `GpxParser` (input).
 
 ### The service is the engine — and it's configured statically
 
-`MockLocationService` is a `LifecycleService` foreground service. Its coupling to the
-ViewModel is deliberately *not* via binding:
+`MockLocationService` is a `LifecycleService` foreground service
+(`foregroundServiceType="location"`). Its coupling to the ViewModel is deliberately
+*not* via binding:
 
 - Live output (`isRunning`, `progress`, `currentPoint`, `distanceTraveled`) is exposed
-  as **companion-object `StateFlow`s** the ViewModel simply re-exposes.
+  as **companion-object `StateFlow`s** the ViewModel simply re-exposes. Because they
+  are process-global, the UI stays correct when the service outlives the activity.
 - Input is set via **static `configure(...)` / `configureFixed(...)`** *before*
-  `startForegroundService()`. The service reads that static config in `onStartCommand`.
-- Stop is a self-`Intent` with `action = "STOP"`.
+  `startForegroundService()`. The service reads that static config in `onStartCommand`
+  and stops itself if nothing was configured.
+- Stop is a self-`Intent` with `action = "STOP"` (also used by the notification action).
 
 Don't "fix" this into a bound service — the static-config pattern is intentional and keeps
 the ViewModel↔service handoff trivial.
+
+Which settings apply to a *running* session differs: speed, the GPX-speed toggle and
+the update interval are pushed live through `MockLocationService.updateSpeed` /
+`updateUseGpxSpeed` / `updateInterval`. Start/end km, travel mode and the fixed
+coordinate only take effect on the next start.
 
 ### Why mocking is done two ways at once
 
@@ -67,49 +86,68 @@ service does **both** of these every tick — do not reduce it to just `GPS_PROV
    ~1 s gap leaks the real position. The git history ("Mock FLP directly…") is this fix —
    don't regress it.
 
-`PASSIVE_PROVIDER` is never registered; it reflects the others for free.
+`PASSIVE_PROVIDER` is never registered; it reflects the others for free. If Play
+Services is unavailable the FLP step is skipped and only `LocationManager` is mocked.
 
 ### Track playback (`walkTrack` / `walkBetween`)
 
 Positions are interpolated per-segment along the track. Speed is either the user's
 `speedKmh` (converted to m/s) or, when `useGpxSpeed` is on and the points carry speed,
 interpolated from GPX speed. `TravelMode` (`Normal` / `Loop` / `Bounce`) controls what
-happens at the end. `startKm`/`endKm` window the played range. Bearing is computed
-great-circle style between consecutive points.
+happens at the end; `Loop` and `Bounce` pause 3 s at each turnaround. `startKm`/`endKm`
+window the played range; `startKm > endKm` plays the track backwards. Bearing is
+computed great-circle style between consecutive points.
 
 Fixed mode (`fixedLoop`) just re-emits one coordinate forever at `updateIntervalMs`.
 
 ### GPX parsing (`GpxParser.kt`)
 
-`XmlPullParser`, **namespace-agnostic** (matches on local tag name via
-`substringAfterLast(':')`, so `gpxtpx:speed` works). Each `<trk>` becomes one `GpxTrack`;
-multi-track files trigger a selection dialog. Per-point speed comes from an explicit
-`<speed>`/extension, else it's **derived from `<time>` timestamps**
-(`distance / Δt`, last point inherits the previous segment).
+`XmlPullParser` with namespace awareness off. `ele`, `speed` and `time` are matched
+on the local tag name (prefix stripped via `substringAfterLast(':')`), so
+`gpxtpx:speed` works; `trk`, `name` and `trkpt` are matched verbatim. Each `<trk>`
+becomes one `GpxTrack`; multi-track files trigger a selection dialog. Per-point speed
+comes from an explicit `<speed>`/extension, else it's **derived from `<time>`
+timestamps** (`distance / Δt`, last point inherits the previous segment).
+`GpxTrack.totalDistanceMeters` is lazy and is what `startKm`/`endKm` clamp against.
+
+### UI (`ui/screens/HomeScreen.kt`)
+
+One ~2100-line file. `HomeScreen` owns the file picker, dialogs and top bar, then
+delegates to `PortraitContent` or `LandscapeContent` (two-pane). Every card and dialog
+is a private composable in the same file. `TrackPreviewCard` is the Canvas: pinch-zoom,
+two-finger rotation, draggable start/end markers with km labels, direction arrows.
+
+Internal state is always metric (`speedKmh`, `startKm`, `endKm`); `ui/UnitFormat.kt`
+converts to/from the selected `UnitSystem` at the UI edge only.
 
 ### Settings & persistence
 
 `SharedPreferences` named `"locomocktion"`. Speed, custom-speed mode, interval, travel
 mode, GPX-speed toggle, unit system, fixed-location fields, and the last-loaded GPX
 (uri/name/track-index + start/end km) are all persisted and restored in
-`MainViewModel.init`, which auto-reloads the last track on launch.
+`MainViewModel.init`, which auto-reloads the last track on launch. The file picker
+takes a persistable URI permission so that reload works across restarts.
 
 ### Updater
 
-`UpdateChecker.fetchLatestRelease()` hits the GitHub releases API for
-`c0dev0id/locomocktion`, finds the first `.apk` asset. `isNewerVersion` is a plain
-**tag-string inequality** (not semver parsing) against `BuildConfig.VERSION_NAME`.
-`ApkInstaller`/`FileProvider` handle the download+install flow.
+`UpdateChecker.fetchLatestRelease()` hits the GitHub `releases/latest` endpoint for
+`c0dev0id/locomocktion` and takes the first `.apk` asset. Because that endpoint ignores
+prereleases and drafts, the nightly never shows up as an update. `isNewerVersion` is a
+plain **tag-string inequality** (not semver parsing) against `BuildConfig.VERSION_NAME`,
+so a `dev` or `nightly` build always reports an update as available.
+`ApkInstaller`/`FileProvider` (cache dir) handle the download+install flow.
 
 ## Runtime prerequisites
 
 The app is inert until the user sets it as the **Mock location app** in Developer
-options. `util/isMockLocationEnabled` checks the `mock_location` appop. `MainActivity`
-requests location + notification permissions and battery-optimization exemption on launch.
+options. `util/isMockLocationEnabled` checks the `mock_location` appop before start.
+`MainActivity` requests location + notification permissions and battery-optimization
+exemption on launch.
 
 ## Conventions specific to this repo
 
 - No database / schema-migration code while version < 1.0.0.
 - Keep the dependency footprint small; prefer existing APIs over new libraries.
-- Update `CHANGELOG.md` (Keep a Changelog format) after user-facing changes and keep
-  `.github/development-journal.md` current.
+- Update `CHANGELOG.md` (Keep a Changelog format) after user-facing changes.
+- `.github/development-journal.md` holds the stack, key decisions and feature list;
+  keep it in sync with changes it describes.
