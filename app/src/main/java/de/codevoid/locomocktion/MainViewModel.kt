@@ -342,7 +342,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
        } else {
            val track = state.track ?: return
            MockLocationService.configure(
-               points = track.points,
+               track = track,
                speed = state.speedKmh / 3.6f,
                useGpxSpeed = state.useGpxSpeed,
                intervalMs = state.updateIntervalMs,
@@ -357,7 +357,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
    }
 
     fun stopMocking() {
-        val intent = Intent(app, MockLocationService::class.java).apply { action = "STOP" }
+        val intent = Intent(app, MockLocationService::class.java).apply { action = MockLocationService.ACTION_STOP }
         app.startService(intent)
     }
 

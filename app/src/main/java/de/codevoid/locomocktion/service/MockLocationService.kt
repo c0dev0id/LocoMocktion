@@ -11,7 +11,6 @@ import android.content.pm.ServiceInfo
 import android.location.Location
 import android.location.LocationManager
 import android.location.provider.ProviderProperties
-import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -21,8 +20,9 @@ import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import de.codevoid.locomocktion.MainActivity
 import de.codevoid.locomocktion.R
+import de.codevoid.locomocktion.gpx.GpxTrack
 import de.codevoid.locomocktion.gpx.TrackPoint
-import de.codevoid.locomocktion.gpx.distanceBetween
+import de.codevoid.locomocktion.gpx.interpolate
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +37,7 @@ enum class TravelMode(val label: String, val description: String) {
 class MockLocationService : LifecycleService() {
 
     companion object {
+        const val ACTION_STOP = "STOP"
         private const val CHANNEL_ID = "mock_location_channel"
         private const val NOTIFICATION_ID = 1
 
@@ -56,18 +57,17 @@ class MockLocationService : LifecycleService() {
         private val _distanceTraveled = MutableStateFlow(0.0)
         val distanceTraveled: StateFlow<Double> = _distanceTraveled
 
-        private var trackPoints: List<TrackPoint> = emptyList()
+        private var track: GpxTrack? = null
         private var speedMultiplier: Float = 1f
         private var useGpxSpeed: Boolean = false
-        var updateIntervalMs: Long = 1000L
-            private set
+        private var updateIntervalMs: Long = 1000L
         private var startOffsetMeters: Double = 0.0
         private var endOffsetMeters: Double = Double.MAX_VALUE
         private var travelMode: TravelMode = TravelMode.Normal
         private var fixedPoint: TrackPoint? = null
 
         fun configure(
-            points: List<TrackPoint>,
+            track: GpxTrack,
             speed: Float,
             useGpxSpeed: Boolean = false,
             intervalMs: Long,
@@ -75,7 +75,7 @@ class MockLocationService : LifecycleService() {
             endOffsetMeters: Double,
             travelMode: TravelMode,
         ) {
-            trackPoints = points
+            this.track = track
             speedMultiplier = speed
             this.useGpxSpeed = useGpxSpeed
             updateIntervalMs = intervalMs
@@ -87,7 +87,7 @@ class MockLocationService : LifecycleService() {
 
         fun configureFixed(point: TrackPoint, intervalMs: Long) {
             fixedPoint = point
-            trackPoints = emptyList()
+            track = null
             updateIntervalMs = intervalMs
         }
 
@@ -120,14 +120,12 @@ class MockLocationService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
 
-        when (intent?.action) {
-            "STOP" -> {
-                stopMocking()
-                return START_NOT_STICKY
-            }
+        if (intent?.action == ACTION_STOP) {
+            stopMocking()
+            return START_NOT_STICKY
         }
 
-        if (trackPoints.isEmpty() && fixedPoint == null) {
+        if (track == null && fixedPoint == null) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -141,11 +139,6 @@ class MockLocationService : LifecycleService() {
         startMocking()
 
         return START_STICKY
-    }
-
-    override fun onBind(intent: Intent): IBinder? {
-        super.onBind(intent)
-        return null
     }
 
     override fun onDestroy() {
@@ -162,23 +155,18 @@ class MockLocationService : LifecycleService() {
         // preventing navigation apps from falling back to a real unmocked provider.
         val candidates = locationManager.allProviders.filter { it != PASSIVE }
         val succeeded = mutableListOf<String>()
-        try {
-            for (name in candidates) {
-                try { locationManager.removeTestProvider(name) } catch (_: Exception) {}
-                try {
-                    locationManager.addTestProvider(
-                        name,
-                        false, false, false, false, true, true, true,
-                        ProviderProperties.POWER_USAGE_LOW,
-                        ProviderProperties.ACCURACY_FINE,
-                    )
-                    locationManager.setTestProviderEnabled(name, true)
-                    succeeded.add(name)
-                } catch (_: Exception) {}
-            }
-        } catch (e: SecurityException) {
-            stopSelf()
-            return
+        for (name in candidates) {
+            try { locationManager.removeTestProvider(name) } catch (_: Exception) {}
+            try {
+                locationManager.addTestProvider(
+                    name,
+                    false, false, false, false, true, true, true,
+                    ProviderProperties.POWER_USAGE_LOW,
+                    ProviderProperties.ACCURACY_FINE,
+                )
+                locationManager.setTestProviderEnabled(name, true)
+                succeeded.add(name)
+            } catch (_: Exception) {}
         }
 
         if (succeeded.isEmpty()) {
@@ -198,11 +186,9 @@ class MockLocationService : LifecycleService() {
             } catch (_: Exception) {
                 // Play Services unavailable — fall back to LocationManager-only mocking.
             }
-            val fp = fixedPoint
-            if (fp != null) {
-                withContext(Dispatchers.Default) { fixedLoop(fp) }
-            } else {
-                withContext(Dispatchers.Default) { walkTrack() }
+            withContext(Dispatchers.Default) {
+                val fp = fixedPoint
+                if (fp != null) fixedLoop(fp) else track?.let { walkTrack(it) }
             }
             withContext(Dispatchers.Main) { stopMocking() }
         }
@@ -217,13 +203,12 @@ class MockLocationService : LifecycleService() {
         }
     }
 
-    private suspend fun walkTrack() {
-        if (trackPoints.size < 2) return
+    private suspend fun walkTrack(track: GpxTrack) {
+        val points = track.points
+        if (points.size < 2) return
 
-        val segmentDistances = (0 until trackPoints.lastIndex).map { i ->
-            distanceBetween(trackPoints[i], trackPoints[i + 1])
-        }
-        val totalDist = segmentDistances.sum()
+        val segmentDistances = track.segmentMeters
+        val totalDist = track.totalDistanceMeters
         if (totalDist < 0.1) return
 
         val startMeters = startOffsetMeters.coerceIn(0.0, totalDist)
@@ -236,7 +221,7 @@ class MockLocationService : LifecycleService() {
 
         while (true) {
             totalTraveled = walkBetween(
-                startMeters, endMeters, segmentDistances,
+                track, startMeters, endMeters,
                 rangeMeters, totalTraveled, forward = forward,
             )
 
@@ -246,7 +231,7 @@ class MockLocationService : LifecycleService() {
                 TravelMode.Bounce -> {
                     delay(3000)
                     totalTraveled = walkBetween(
-                        endMeters, startMeters, segmentDistances,
+                        track, endMeters, startMeters,
                         rangeMeters, totalTraveled, forward = !forward,
                     )
                     delay(3000)
@@ -256,18 +241,10 @@ class MockLocationService : LifecycleService() {
 
         // Set final point at end position (Normal mode only)
         val (segIdx, segOff) = findPosition(endMeters, segmentDistances)
-        if (segIdx < trackPoints.size - 1) {
-            val from = trackPoints[segIdx]
-            val to = trackPoints[segIdx + 1]
+        if (segIdx < points.size - 1) {
             val segDist = segmentDistances[segIdx]
             val fraction = if (segDist < 0.1) 0.0 else (segOff / segDist).coerceIn(0.0, 1.0)
-            val finalPoint = TrackPoint(
-                from.latitude + (to.latitude - from.latitude) * fraction,
-                from.longitude + (to.longitude - from.longitude) * fraction,
-                if (from.elevation != null && to.elevation != null)
-                    from.elevation + (to.elevation - from.elevation) * fraction
-                else from.elevation ?: to.elevation,
-            )
+            val finalPoint = interpolate(points[segIdx], points[segIdx + 1], fraction)
             setMockLocation(finalPoint, 0f)
             _currentPoint.value = finalPoint
         }
@@ -276,13 +253,15 @@ class MockLocationService : LifecycleService() {
     }
 
     private suspend fun walkBetween(
+        track: GpxTrack,
         fromMeters: Double,
         toMeters: Double,
-        segmentDistances: List<Double>,
         rangeMeters: Double,
         initialTraveled: Double,
         forward: Boolean,
     ): Double {
+        val points = track.points
+        val segmentDistances = track.segmentMeters
         var (segmentIndex, segmentOffset) = findPosition(fromMeters, segmentDistances)
         var legTraveled = 0.0
         var totalTraveled = initialTraveled
@@ -290,8 +269,8 @@ class MockLocationService : LifecycleService() {
         while (legTraveled < rangeMeters) {
             if (segmentIndex < 0 || segmentIndex >= segmentDistances.size) break
 
-            val from = trackPoints[segmentIndex]
-            val to = trackPoints[segmentIndex + 1]
+            val from = points[segmentIndex]
+            val to = points[segmentIndex + 1]
             val segmentDist = segmentDistances[segmentIndex]
 
             if (segmentDist < 0.1) {
@@ -300,17 +279,8 @@ class MockLocationService : LifecycleService() {
                 continue
             }
 
-            // Interpolate position
             val fraction = (segmentOffset / segmentDist).coerceIn(0.0, 1.0)
-            val lat = from.latitude + (to.latitude - from.latitude) * fraction
-            val lon = from.longitude + (to.longitude - from.longitude) * fraction
-            val ele = if (from.elevation != null && to.elevation != null) {
-                from.elevation + (to.elevation - from.elevation) * fraction
-            } else {
-                from.elevation ?: to.elevation
-            }
-
-            val point = TrackPoint(lat, lon, ele)
+            val point = interpolate(from, to, fraction)
             val bearingVal = if (forward) bearing(from, to) else bearing(to, from)
 
             // Determine effective speed: interpolate GPX speed if available and enabled,
@@ -360,7 +330,7 @@ class MockLocationService : LifecycleService() {
 
     private fun findPosition(
         offsetMeters: Double,
-        segmentDistances: List<Double>,
+        segmentDistances: DoubleArray,
     ): Pair<Int, Double> {
         var remaining = offsetMeters
         for (i in segmentDistances.indices) {
@@ -391,16 +361,7 @@ class MockLocationService : LifecycleService() {
         // Also push to individual LocationManager providers for non-FLP apps.
         for (name in activeMockProviders) {
             try {
-                locationManager.setTestProviderLocation(name, Location(name).apply {
-                    latitude = point.latitude
-                    longitude = point.longitude
-                    point.elevation?.let { altitude = it }
-                    accuracy = 3.0f
-                    this.bearing = bearing
-                    this.speed = speed
-                    time = now
-                    elapsedRealtimeNanos = elapsed
-                })
+                locationManager.setTestProviderLocation(name, Location(location).apply { provider = name })
             } catch (_: Exception) {}
         }
     }
@@ -455,7 +416,7 @@ class MockLocationService : LifecycleService() {
         )
         val stopIntent = PendingIntent.getService(
             this, 1,
-            Intent(this, MockLocationService::class.java).apply { action = "STOP" },
+            Intent(this, MockLocationService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_IMMUTABLE,
         )
 
