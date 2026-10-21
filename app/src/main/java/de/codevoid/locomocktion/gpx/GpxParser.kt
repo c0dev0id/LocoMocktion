@@ -5,7 +5,6 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.InputStream
 import java.time.Instant
-import kotlin.math.*
 
 data class TrackPoint(
     val latitude: Double,
@@ -18,39 +17,38 @@ data class GpxTrack(
     val name: String?,
     val points: List<TrackPoint>,
 ) {
-    val totalDistanceMeters: Double by lazy {
-        points.zipWithNext { a, b -> distanceBetween(a, b) }.sum()
+    /** Length of each segment in meters; index i is the segment from point i to i + 1. */
+    val segmentMeters: DoubleArray =
+        DoubleArray((points.size - 1).coerceAtLeast(0)) { distanceBetween(points[it], points[it + 1]) }
+
+    /** Distance from the first point to each point in meters; index 0 is 0. */
+    val cumulativeMeters: DoubleArray = DoubleArray(points.size).also { cumulative ->
+        for (i in segmentMeters.indices) cumulative[i + 1] = cumulative[i] + segmentMeters[i]
     }
+
+    val totalDistanceMeters: Double get() = cumulativeMeters.lastOrNull() ?: 0.0
+    val totalDistanceKm: Double get() = totalDistanceMeters / 1000.0
     val hasSpeedData: Boolean by lazy {
         points.any { it.speed != null }
     }
 }
 
-fun distanceBetween(a: TrackPoint, b: TrackPoint): Double {
+fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val results = FloatArray(1)
-    Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, results)
+    Location.distanceBetween(lat1, lon1, lat2, lon2, results)
     return results[0].toDouble()
 }
 
-/**
- * Perpendicular distance from point [p] to the line segment [start]-[end], in meters.
- */
-private fun perpendicularDistance(p: TrackPoint, start: TrackPoint, end: TrackPoint): Double {
-    if (start.latitude == end.latitude && start.longitude == end.longitude) {
-        return distanceBetween(p, start)
-    }
-    val totalDist = distanceBetween(start, end)
-    if (totalDist < 0.1) return distanceBetween(p, start)
+fun distanceBetween(a: TrackPoint, b: TrackPoint): Double =
+    distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude)
 
-    // Project p onto the line using geographic distances
-    val dStartP = distanceBetween(start, p)
-    val dEndP = distanceBetween(end, p)
-
-    // Use Heron's formula to get the area, then derive height
-    val s = (totalDist + dStartP + dEndP) / 2.0
-    val area = sqrt((s * (s - totalDist) * (s - dStartP) * (s - dEndP)).coerceAtLeast(0.0))
-    return 2.0 * area / totalDist
-}
+/** Point at [fraction] (0..1) of the way from [from] to [to]; elevation is kept when only one side has it. */
+fun interpolate(from: TrackPoint, to: TrackPoint, fraction: Double): TrackPoint = TrackPoint(
+    from.latitude + (to.latitude - from.latitude) * fraction,
+    from.longitude + (to.longitude - from.longitude) * fraction,
+    if (from.elevation != null && to.elevation != null) from.elevation + (to.elevation - from.elevation) * fraction
+    else from.elevation ?: to.elevation,
+)
 
 /** Intermediate representation that also holds the raw timestamp for speed derivation. */
 private data class RawPoint(
@@ -82,12 +80,7 @@ private fun rawToTrackPoints(raw: List<RawPoint>): List<TrackPoint> {
         if (a.timeEpochMs != null && b.timeEpochMs != null) {
             val dtMs = b.timeEpochMs - a.timeEpochMs
             if (dtMs > 0) {
-                val dist = run {
-                    val results = FloatArray(1)
-                    Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, results)
-                    results[0].toDouble()
-                }
-                segSpeed[i] = dist / (dtMs / 1000.0)
+                segSpeed[i] = distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude) / (dtMs / 1000.0)
             }
         }
     }
