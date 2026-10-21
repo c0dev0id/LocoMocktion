@@ -15,7 +15,7 @@ suspend fun downloadApk(
     onProgress: (Float) -> Unit,
 ): File = withContext(Dispatchers.IO) {
     val target = File(context.cacheDir, "update.apk")
-    if (target.exists()) target.delete()
+    target.delete()
 
     val connection = (URL(url).openConnection() as HttpURLConnection).apply {
         requestMethod = "GET"
@@ -48,7 +48,6 @@ suspend fun downloadApk(
                         }
                     }
                 }
-                output.flush()
             }
         }
         onProgress(1f)

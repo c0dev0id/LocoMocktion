@@ -45,9 +45,3 @@ fun formatDistanceKm(km: Double, system: UnitSystem, decimals: Int = 2): String 
     }
     return "%.${decimals}f %s".format(display, distanceUnitLabel(system))
 }
-
-fun parseSpeedInput(str: String, system: UnitSystem): Float? =
-    str.toFloatOrNull()?.let { displayToKmh(it, system) }
-
-fun parseDistanceInput(str: String, system: UnitSystem): Float? =
-    str.toFloatOrNull()?.let { displayToKm(it, system) }

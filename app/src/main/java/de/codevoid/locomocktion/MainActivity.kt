@@ -40,14 +40,10 @@ class MainActivity : ComponentActivity() {
 private fun RequestPermissions() {
     val context = LocalContext.current
 
-    val batteryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { }
-
     fun requestBatteryExemptionIfNeeded() {
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
-            batteryLauncher.launch(
+            context.startActivity(
                 Intent(
                     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:${context.packageName}")
