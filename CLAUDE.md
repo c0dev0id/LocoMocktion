@@ -108,7 +108,11 @@ on the local tag name (prefix stripped via `substringAfterLast(':')`), so
 becomes one `GpxTrack`; multi-track files trigger a selection dialog. Per-point speed
 comes from an explicit `<speed>`/extension, else it's **derived from `<time>`
 timestamps** (`distance / Δt`, last point inherits the previous segment).
-`GpxTrack.totalDistanceMeters` is lazy and is what `startKm`/`endKm` clamp against.
+
+`GpxTrack` computes `segmentMeters` and `cumulativeMeters` once at construction, on
+the IO thread during parsing. The service walker and the preview canvas both read
+them, and `interpolate` in the same file is the one lerp between two points. Add
+track geometry there rather than re-deriving it from `points`.
 
 ### UI (`ui/screens/HomeScreen.kt`)
 
@@ -127,6 +131,12 @@ mode, GPX-speed toggle, unit system, fixed-location fields, and the last-loaded 
 (uri/name/track-index + start/end km) are all persisted and restored in
 `MainViewModel.init`, which auto-reloads the last track on launch. The file picker
 takes a persistable URI permission so that reload works across restarts.
+
+Scalar settings change through `MainViewModel.updateSettings`, which writes every
+persisted key on each call: a new setting needs its key added there and in `init`.
+Start/end km and the last-GPX keys are written separately because they are
+track-scoped. Derived UI conditions (`canStart`, `fixedPoint`, `hasMultipleTracks`)
+are getters on `UiState`, not recomputed in the layouts.
 
 ### Updater
 
