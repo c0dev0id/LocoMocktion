@@ -4,11 +4,11 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import de.codevoid.locomocktion.gpx.GpxTrack
 import de.codevoid.locomocktion.gpx.TrackPoint
-import de.codevoid.locomocktion.gpx.distanceBetween
 import de.codevoid.locomocktion.gpx.parseGpx
 import de.codevoid.locomocktion.service.MockLocationService
 import de.codevoid.locomocktion.service.TravelMode
@@ -44,7 +44,15 @@ data class UiState(
     val useFixedLocation: Boolean = false,
     val fixedLat: String = "",
     val fixedLon: String = "",
-)
+) {
+    val fixedPoint: TrackPoint?
+        get() = parseLatitude(fixedLat)?.let { lat -> parseLongitude(fixedLon)?.let { lon -> TrackPoint(lat, lon) } }
+    val canStart: Boolean get() = if (useFixedLocation) fixedPoint != null else track != null
+    val hasMultipleTracks: Boolean get() = (availableTracks?.size ?: 0) > 1
+}
+
+fun parseLatitude(text: String): Double? = text.toDoubleOrNull()?.takeIf { it in -90.0..90.0 }
+fun parseLongitude(text: String): Double? = text.toDoubleOrNull()?.takeIf { it in -180.0..180.0 }
 
 sealed interface UpdateState {
     data object Idle : UpdateState
@@ -72,50 +80,36 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
 
     init {
-        // Restore persisted settings before loading the track
-        val savedSpeed = prefs.getFloat("speed_kmh", 20f)
-        val savedCustomMode = prefs.getBoolean("custom_mode", false)
-        val savedInterval = prefs.getLong("update_interval_ms", 1000L)
-        val savedMode = try {
-            TravelMode.valueOf(prefs.getString("travel_mode", TravelMode.Normal.name)!!)
-        } catch (e: IllegalArgumentException) {
-            TravelMode.Normal
-        }
-        val savedUseGpxSpeed = prefs.getBoolean("use_gpx_speed", false)
-        val savedUnits = try {
-            UnitSystem.valueOf(prefs.getString("unit_system", UnitSystem.Metric.name)!!)
-        } catch (e: IllegalArgumentException) {
-            UnitSystem.Metric
-        }
-        val savedUseFixedLocation = prefs.getBoolean("use_fixed_location", false)
-        val savedFixedLat = prefs.getString("fixed_lat", "") ?: ""
-        val savedFixedLon = prefs.getString("fixed_lon", "") ?: ""
-        _uiState.update {
-            it.copy(
-                speedKmh = savedSpeed,
-                customMode = savedCustomMode,
-                updateIntervalMs = savedInterval,
-                travelMode = savedMode,
-                useGpxSpeed = savedUseGpxSpeed,
-                unitSystem = savedUnits,
-                useFixedLocation = savedUseFixedLocation,
-                fixedLat = savedFixedLat,
-                fixedLon = savedFixedLon,
-            )
-        }
+        val savedMode = prefs.getString("travel_mode", null)
+        val savedUnits = prefs.getString("unit_system", null)
+        _uiState.value = UiState(
+            speedKmh = prefs.getFloat("speed_kmh", 20f),
+            customMode = prefs.getBoolean("custom_mode", false),
+            updateIntervalMs = prefs.getLong("update_interval_ms", 1000L),
+            travelMode = TravelMode.entries.firstOrNull { it.name == savedMode } ?: TravelMode.Normal,
+            useGpxSpeed = prefs.getBoolean("use_gpx_speed", false),
+            unitSystem = UnitSystem.entries.firstOrNull { it.name == savedUnits } ?: UnitSystem.Metric,
+            useFixedLocation = prefs.getBoolean("use_fixed_location", false),
+            fixedLat = prefs.getString("fixed_lat", "") ?: "",
+            fixedLon = prefs.getString("fixed_lon", "") ?: "",
+        )
 
         val lastUri = prefs.getString("last_gpx_uri", null)
-        val lastName = prefs.getString("last_gpx_name", null)
-        val lastTrackIndex = prefs.getInt("last_gpx_track_index", -1)
         if (lastUri != null) {
-            loadGpx(Uri.parse(lastUri), lastName, autoSelectIndex = lastTrackIndex)
+            loadGpx(
+                Uri.parse(lastUri),
+                prefs.getString("last_gpx_name", null),
+                autoSelectIndex = prefs.getInt("last_gpx_track_index", -1),
+            )
         }
     }
 
+    /** Loads [uri]; [displayName] is looked up from the content provider when null. */
     fun loadGpx(uri: Uri, displayName: String?, autoSelectIndex: Int = -1) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
+                val name = displayName ?: queryDisplayName(uri)
                 val stream = app.contentResolver.openInputStream(uri)
                     ?: throw IllegalArgumentException("Cannot open file")
                 val allTracks = stream.use { parseGpx(it) }
@@ -126,19 +120,17 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
 
-                if (allTracks.size == 1) {
-                    applyTrack(allTracks[0], 0, uri, displayName, allTracks)
-                } else if (autoSelectIndex in allTracks.indices) {
-                    applyTrack(allTracks[autoSelectIndex], autoSelectIndex, uri, displayName, allTracks)
+                val index = if (allTracks.size == 1) 0 else autoSelectIndex
+                if (index in allTracks.indices) {
+                    applyTrack(allTracks[index], index, uri, name, allTracks)
                 } else {
-                    // Multiple tracks – let the user choose
                     _uiState.update {
                         it.copy(
                             isLoading = false,
                             availableTracks = allTracks,
                             showTrackSelector = true,
                             pendingUri = uri.toString(),
-                            pendingDisplayName = displayName,
+                            pendingDisplayName = name,
                         )
                     }
                 }
@@ -147,6 +139,12 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    private fun queryDisplayName(uri: Uri): String? =
+        app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+        }
 
     fun selectTrack(index: Int) {
         val state = _uiState.value
@@ -163,8 +161,7 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun showTrackSelection() {
-        val state = _uiState.value
-        if (state.availableTracks != null && state.availableTracks.size > 1) {
+        if (_uiState.value.hasMultipleTracks) {
             _uiState.update { it.copy(showTrackSelector = true) }
         }
     }
@@ -173,112 +170,101 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(showTrackSelector = false) }
     }
 
-   private fun applyTrack(
-       raw: GpxTrack,
-       trackIndex: Int,
-       uri: Uri?,
-       displayName: String?,
-       allTracks: List<GpxTrack>,
-   ) {
-       if (raw.points.isEmpty()) {
-           _uiState.update { it.copy(isLoading = false, error = "Track contains no points") }
-           return
-       }
-       val name = displayName ?: raw.name ?: "Unknown"
-       val maxKm = (raw.totalDistanceMeters / 1000).toFloat()
+    private fun applyTrack(
+        raw: GpxTrack,
+        trackIndex: Int,
+        uri: Uri?,
+        displayName: String?,
+        allTracks: List<GpxTrack>,
+    ) {
+        val name = displayName ?: raw.name ?: "Unknown"
+        val maxKm = raw.totalDistanceKm.toFloat()
 
-       // Restore saved start/end positions when loading the same track
-       val savedUri = prefs.getString("last_gpx_uri", null)
-       val savedTrackIndex = prefs.getInt("last_gpx_track_index", -1)
-       val isSameTrack = uri?.toString() == savedUri && trackIndex == savedTrackIndex
-       val startKm = if (isSameTrack) prefs.getFloat("start_km", 0f).coerceIn(0f, maxKm) else 0f
-       val endKm = if (isSameTrack) prefs.getFloat("end_km", maxKm).coerceIn(0f, maxKm) else maxKm
+        // Restore saved start/end positions when loading the same track
+        val savedUri = prefs.getString("last_gpx_uri", null)
+        val savedTrackIndex = prefs.getInt("last_gpx_track_index", -1)
+        val isSameTrack = uri?.toString() == savedUri && trackIndex == savedTrackIndex
+        val startKm = if (isSameTrack) prefs.getFloat("start_km", 0f).coerceIn(0f, maxKm) else 0f
+        val endKm = if (isSameTrack) prefs.getFloat("end_km", maxKm).coerceIn(0f, maxKm) else maxKm
 
-       _uiState.update {
-           it.copy(
-               track = raw,
-               fileName = name,
-               startKm = startKm,
-               endKm = endKm,
-               error = null,
-               isLoading = false,
-               availableTracks = allTracks,
-               pendingUri = uri?.toString(),
-               pendingDisplayName = displayName,
-           )
-       }
-       if (uri != null) {
-           prefs.edit()
-               .putString("last_gpx_uri", uri.toString())
-               .putString("last_gpx_name", name)
-               .putInt("last_gpx_track_index", trackIndex)
-               .apply()
-       }
-   }
+        _uiState.update {
+            it.copy(
+                track = raw,
+                fileName = name,
+                startKm = startKm,
+                endKm = endKm,
+                error = null,
+                isLoading = false,
+                availableTracks = allTracks,
+                pendingUri = uri?.toString(),
+                pendingDisplayName = displayName,
+            )
+        }
+        if (uri != null) {
+            prefs.edit()
+                .putString("last_gpx_uri", uri.toString())
+                .putString("last_gpx_name", name)
+                .putInt("last_gpx_track_index", trackIndex)
+                .apply()
+        }
+    }
+
+    /** Applies a settings change and writes every scalar setting, so no field can be left unpersisted. */
+    private fun updateSettings(transform: (UiState) -> UiState) {
+        val state = _uiState.updateAndGet(transform)
+        prefs.edit()
+            .putFloat("speed_kmh", state.speedKmh)
+            .putBoolean("custom_mode", state.customMode)
+            .putLong("update_interval_ms", state.updateIntervalMs)
+            .putString("travel_mode", state.travelMode.name)
+            .putBoolean("use_gpx_speed", state.useGpxSpeed)
+            .putString("unit_system", state.unitSystem.name)
+            .putBoolean("use_fixed_location", state.useFixedLocation)
+            .putString("fixed_lat", state.fixedLat)
+            .putString("fixed_lon", state.fixedLon)
+            .apply()
+    }
 
     fun setSpeed(kmh: Float) {
-        _uiState.update { it.copy(speedKmh = kmh) }
+        updateSettings { it.copy(speedKmh = kmh) }
         MockLocationService.updateSpeed(kmh / 3.6f)
-        prefs.edit().putFloat("speed_kmh", kmh).apply()
     }
 
-    fun setCustomMode(custom: Boolean) {
-        _uiState.update { it.copy(customMode = custom) }
-        prefs.edit().putBoolean("custom_mode", custom).apply()
-    }
+    fun setCustomMode(custom: Boolean) = updateSettings { it.copy(customMode = custom) }
 
     fun setUseGpxSpeed(enabled: Boolean) {
-        _uiState.update { it.copy(useGpxSpeed = enabled) }
+        updateSettings { it.copy(useGpxSpeed = enabled) }
         MockLocationService.updateUseGpxSpeed(enabled)
-        prefs.edit().putBoolean("use_gpx_speed", enabled).apply()
     }
 
     fun setUpdateInterval(ms: Long) {
-        _uiState.update { it.copy(updateIntervalMs = ms) }
+        updateSettings { it.copy(updateIntervalMs = ms) }
         MockLocationService.updateInterval(ms)
-        prefs.edit().putLong("update_interval_ms", ms).apply()
     }
 
     fun setStartKm(km: Float) {
         val track = _uiState.value.track ?: return
-        val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        val clamped = km.coerceIn(0f, maxKm)
+        val clamped = km.coerceIn(0f, track.totalDistanceKm.toFloat())
         _uiState.update { it.copy(startKm = clamped) }
         prefs.edit().putFloat("start_km", clamped).apply()
     }
 
     fun setEndKm(km: Float) {
         val track = _uiState.value.track ?: return
-        val maxKm = (track.totalDistanceMeters / 1000).toFloat()
-        val clamped = km.coerceIn(0f, maxKm)
+        val clamped = km.coerceIn(0f, track.totalDistanceKm.toFloat())
         _uiState.update { it.copy(endKm = clamped) }
         prefs.edit().putFloat("end_km", clamped).apply()
     }
 
-    fun setTravelMode(mode: TravelMode) {
-        _uiState.update { it.copy(travelMode = mode) }
-        prefs.edit().putString("travel_mode", mode.name).apply()
-    }
+    fun setTravelMode(mode: TravelMode) = updateSettings { it.copy(travelMode = mode) }
 
-    fun setUnitSystem(system: UnitSystem) {
-        _uiState.update { it.copy(unitSystem = system) }
-        prefs.edit().putString("unit_system", system.name).apply()
-    }
+    fun setUnitSystem(system: UnitSystem) = updateSettings { it.copy(unitSystem = system) }
 
-    fun setUseFixedLocation(enabled: Boolean) {
-        _uiState.update { it.copy(useFixedLocation = enabled) }
-        prefs.edit().putBoolean("use_fixed_location", enabled).apply()
-    }
+    fun setUseFixedLocation(enabled: Boolean) = updateSettings { it.copy(useFixedLocation = enabled) }
 
-    fun setFixedLat(lat: String) {
-        _uiState.update { it.copy(fixedLat = lat) }
-        prefs.edit().putString("fixed_lat", lat).apply()
-    }
+    fun setFixedLat(lat: String) = updateSettings { it.copy(fixedLat = lat) }
 
-    fun setFixedLon(lon: String) {
-        _uiState.update { it.copy(fixedLon = lon) }
-        prefs.edit().putString("fixed_lon", lon).apply()
-    }
+    fun setFixedLon(lon: String) = updateSettings { it.copy(fixedLon = lon) }
 
     fun checkForUpdate() {
         if (_updateState.value is UpdateState.Checking ||
@@ -329,32 +315,27 @@ class MainViewModel(private val app: Application) : AndroidViewModel(app) {
         _updateState.value = UpdateState.Idle
     }
 
-   fun startMocking() {
-       val state = _uiState.value
+    fun startMocking() {
+        val state = _uiState.value
 
-       if (state.useFixedLocation) {
-           val lat = state.fixedLat.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: return
-           val lon = state.fixedLon.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: return
-           MockLocationService.configureFixed(
-               point = TrackPoint(lat, lon),
-               intervalMs = state.updateIntervalMs,
-           )
-       } else {
-           val track = state.track ?: return
-           MockLocationService.configure(
-               track = track,
-               speed = state.speedKmh / 3.6f,
-               useGpxSpeed = state.useGpxSpeed,
-               intervalMs = state.updateIntervalMs,
-               offsetMeters = (state.startKm * 1000).toDouble(),
-               endOffsetMeters = (state.endKm * 1000).toDouble(),
-               travelMode = state.travelMode,
-           )
-       }
+        if (state.useFixedLocation) {
+            val point = state.fixedPoint ?: return
+            MockLocationService.configureFixed(point = point, intervalMs = state.updateIntervalMs)
+        } else {
+            val track = state.track ?: return
+            MockLocationService.configure(
+                track = track,
+                speed = state.speedKmh / 3.6f,
+                useGpxSpeed = state.useGpxSpeed,
+                intervalMs = state.updateIntervalMs,
+                offsetMeters = (state.startKm * 1000).toDouble(),
+                endOffsetMeters = (state.endKm * 1000).toDouble(),
+                travelMode = state.travelMode,
+            )
+        }
 
-       val intent = Intent(app, MockLocationService::class.java)
-       app.startForegroundService(intent)
-   }
+        app.startForegroundService(Intent(app, MockLocationService::class.java))
+    }
 
     fun stopMocking() {
         val intent = Intent(app, MockLocationService::class.java).apply { action = MockLocationService.ACTION_STOP }
